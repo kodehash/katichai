@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/katichai/katich/internal/analysis"
 	"github.com/katichai/katich/internal/context"
 	"github.com/katichai/katich/internal/git"
 	"github.com/spf13/cobra"
@@ -97,6 +98,14 @@ func runContextBuild() error {
 		return fmt.Errorf("failed to detect frameworks: %w", err)
 	}
 
+	// Run static analysis
+	fmt.Println("📊 Analyzing code...")
+	analyzer := analysis.NewAnalyzer(repo.RootPath)
+	analysisResult, err := analyzer.AnalyzeRepository()
+	if err != nil {
+		return fmt.Errorf("failed to analyze code: %w", err)
+	}
+
 	// Display results
 	fmt.Println()
 	fmt.Println("📊 Detection Results:")
@@ -141,6 +150,42 @@ func runContextBuild() error {
 		fmt.Println()
 	}
 
+	// Code Metrics
+	fmt.Println("Code Metrics:")
+	fmt.Printf("  • Total Lines of Code: %d\n", analysisResult.TotalMetrics.LinesOfCode)
+	fmt.Printf("  • Total Functions: %d\n", analysisResult.TotalMetrics.FunctionCount)
+	fmt.Printf("  • Total Classes/Structs: %d\n", analysisResult.TotalMetrics.ClassCount)
+	fmt.Printf("  • Average Function Length: %.1f lines\n", analysisResult.TotalMetrics.AvgFunctionLength)
+	fmt.Printf("  • Max Function Length: %d lines\n", analysisResult.TotalMetrics.MaxFunctionLength)
+	fmt.Printf("  • Total Complexity: %d\n", analysisResult.TotalMetrics.CyclomaticComplexity)
+	fmt.Println()
+
+	// Issues Summary
+	if analysisResult.IssuesSummary.TotalIssues > 0 {
+		fmt.Println("Issues Found:")
+		fmt.Printf("  • Total: %d\n", analysisResult.IssuesSummary.TotalIssues)
+		
+		if len(analysisResult.IssuesSummary.BySeverity) > 0 {
+			fmt.Println("  By Severity:")
+			for severity, count := range analysisResult.IssuesSummary.BySeverity {
+				fmt.Printf("    - %s: %d\n", severity, count)
+			}
+		}
+		fmt.Println()
+	}
+
+	// Top Complex Functions
+	if len(analysisResult.TopComplexity) > 0 {
+		fmt.Println("Most Complex Functions:")
+		for i, fn := range analysisResult.TopComplexity {
+			if i >= 5 {
+				break
+			}
+			fmt.Printf("  %d. %s (complexity: %d, %d lines)\n", i+1, fn.Name, fn.Complexity, fn.LOC)
+		}
+		fmt.Println()
+	}
+
 	// Patterns
 	if len(result.Patterns) > 0 {
 		fmt.Println("Architectural patterns:")
@@ -159,6 +204,12 @@ func runContextBuild() error {
 		fmt.Println()
 	}
 
+	// Create combined context
+	combinedContext := map[string]interface{}{
+		"detection": result,
+		"analysis":  analysisResult,
+	}
+
 	// Save context
 	fmt.Println("💾 Saving context...")
 	contextPath := filepath.Join(repo.RootPath, ".katich", "context.json")
@@ -169,7 +220,7 @@ func runContextBuild() error {
 	}
 
 	// Marshal to JSON
-	data, err := json.MarshalIndent(result, "", "  ")
+	data, err := json.MarshalIndent(combinedContext, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal context: %w", err)
 	}
