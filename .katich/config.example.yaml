@@ -1,0 +1,20 @@
+# Example Katichai Configuration
+
+# LLM Configuration
+llm:
+  provider: openai  # Options: openai, anthropic, local
+  api_key: ""       # Or set via OPENAI_API_KEY / ANTHROPIC_API_KEY env var
+  model: gpt-4      # Model to use for final review synthesis
+  # base_url: http://localhost:11434  # For local LLMs (Ollama, LM Studio)
+
+# Embeddings Configuration
+embeddings:
+  model: jina-code-v2  # Options: jina-code-v2, bge-code, nomic-embed, snowflake-arctic
+  provider: local      # Options: local, api
+  # api_key: ""        # Required if provider is 'api'
+
+# Analysis Configuration
+analysis:
+  max_function_length: 50    # Maximum recommended function length (lines)
+  complexity_threshold: 10   # Maximum cyclomatic complexity
+  similarity_threshold: 0.85 # Threshold for duplicate detection (0.0-1.0)
