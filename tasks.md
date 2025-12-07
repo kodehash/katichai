@@ -42,71 +42,80 @@
 
 ---
 
-## Milestone 2: Git Integration & Diff Extraction
+## Milestone 2: Git Integration & Diff Extraction ✅
 
 ### 2.1 Git Repository Detection
-- [ ] Create `internal/git/repo.go`
-- [ ] Implement Git repository detection
-- [ ] Validate Git installation
-- [ ] Get repository root path
+- [x] Create `internal/git/repo.go`
+- [x] Implement Git repository detection
+- [x] Validate Git installation
+- [x] Get repository root path
 
 ### 2.2 Diff Extraction
-- [ ] Create `internal/git/diff.go`
-- [ ] Implement diff extraction for latest commit
-- [ ] Implement diff extraction for commit range
-- [ ] Implement diff extraction for specific files
-- [ ] Parse diff output into structured format
+- [x] Create `internal/git/diff.go`
+- [x] Implement diff extraction for latest commit
+- [x] Implement diff extraction for commit range
+- [x] Implement diff extraction for specific files
+- [x] Parse diff output into structured format
 
 ### 2.3 Commit Analysis
-- [ ] Create `internal/git/commit.go`
-- [ ] Extract commit metadata (author, message, timestamp)
-- [ ] Get list of changed files
-- [ ] Get file content before/after changes
-- [ ] Handle binary files gracefully
+- [x] Create `internal/git/commit.go`
+- [x] Extract commit metadata (author, message, timestamp)
+- [x] Get list of changed files
+- [x] Get file content before/after changes
+- [x] Handle binary files gracefully
 
 ---
 
-## Milestone 3: Framework & Language Detection
+## Milestone 3: Framework & Language Detection ✅
 
 ### 3.1 Language Detection
-- [ ] Create `internal/context/detector.go`
-- [ ] Implement file extension-based language detection
-- [ ] Support: Go, Java, Python, JavaScript, TypeScript
-- [ ] Create language registry/enum
+- [x] Create `internal/context/detector.go`
+- [x] Implement file extension-based language detection
+- [x] Support: Go, Java, Python, JavaScript, TypeScript, Rust, Kotlin, Swift, Ruby, PHP, C, C++, C#
+- [x] Create language registry/enum
 
 ### 3.2 Framework Detection - Java/Spring Boot
-- [ ] Detect Maven (`pom.xml`) and Gradle (`build.gradle`)
-- [ ] Parse dependencies for Spring Boot
-- [ ] Detect annotations: `@SpringBootApplication`, `@RestController`, `@Service`
-- [ ] Identify Spring patterns (Controller → Service → Repository)
+- [x] Detect Maven (`pom.xml`) and Gradle (`build.gradle`)
+- [x] Parse dependencies for Spring Boot
+- [x] Detect annotations: `@SpringBootApplication`, `@RestController`, `@Service`
+- [x] Identify Spring patterns (Controller → Service → Repository)
 
 ### 3.3 Framework Detection - Node.js/Express
-- [ ] Parse `package.json` for Express dependency
-- [ ] Detect Express patterns (`app.use()`, `express()`)
-- [ ] Identify middleware patterns
+- [x] Parse `package.json` for Express dependency
+- [x] Detect Express patterns (`app.use()`, `express()`)
+- [x] Identify middleware patterns
 
 ### 3.4 Framework Detection - Next.js/React
-- [ ] Detect `app/` or `pages/` directory structure
-- [ ] Parse `package.json` for Next.js/React
-- [ ] Detect `.tsx`/`.jsx` components
-- [ ] Identify React patterns (hooks, components)
+- [x] Detect `app/` or `pages/` directory structure
+- [x] Parse `package.json` for Next.js/React
+- [x] Detect `.tsx`/`.jsx` components
+- [x] Identify React patterns (hooks, components)
 
 ### 3.5 Framework Detection - Python/FastAPI
-- [ ] Parse `requirements.txt` or `pyproject.toml`
-- [ ] Detect FastAPI imports and patterns
-- [ ] Detect Pydantic models
-- [ ] Identify route decorators
+- [x] Parse `requirements.txt` or `pyproject.toml`
+- [x] Detect FastAPI imports and patterns
+- [x] Detect Pydantic models
+- [x] Identify route decorators
 
 ### 3.6 Framework Detection - Go/Gin
-- [ ] Parse `go.mod` for Gin dependency
-- [ ] Detect `gin.Default()` and router patterns
-- [ ] Identify handler patterns (`.GET`, `.POST`, `.PUT`)
-- [ ] Detect middleware usage
+- [x] Parse `go.mod` for Gin dependency
+- [x] Detect `gin.Default()` and router patterns
+- [x] Identify handler patterns (`.GET`, `.POST`, `.PUT`)
+- [x] Detect middleware usage
 
-### 3.7 Framework Metadata Storage
-- [ ] Create framework metadata structure
-- [ ] Store detected frameworks in `context.json`
-- [ ] Include version information where available
+### 3.7 Framework Detection - Popular UI Frameworks
+- [x] React, Vue.js, Angular, Svelte detection
+- [x] SolidJS, Preact, Alpine.js detection
+- [x] Meta frameworks: Next.js, Nuxt, Remix, SvelteKit, Gatsby, Astro
+- [x] UI libraries: Material-UI, Ant Design, Chakra UI, Tailwind CSS, shadcn/ui, Mantine, Vuetify
+- [x] Mobile frameworks: React Native
+- [x] Build tools: Vite, Webpack
+
+### 3.8 Framework Metadata Storage
+- [x] Create framework metadata structure
+- [x] Store detected frameworks in `context.json`
+- [x] Include framework type (Backend, Frontend, FullStack, UI, Build)
+- [x] Include language information
 
 ---
 

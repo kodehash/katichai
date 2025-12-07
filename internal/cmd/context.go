@@ -1,8 +1,13 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 
+	"github.com/katichai/katich/internal/context"
+	"github.com/katichai/katich/internal/git"
 	"github.com/spf13/cobra"
 )
 
@@ -67,23 +72,118 @@ var contextClearCmd = &cobra.Command{
 
 func runContextBuild() error {
 	fmt.Println("🔨 Building codebase context...")
+	fmt.Println()
+	
+	// Find Git repository
+	repo, err := git.FindRepository()
+	if err != nil {
+		return fmt.Errorf("failed to find Git repository: %w", err)
+	}
 	
 	if verbose {
 		fmt.Println("Verbose mode enabled")
+		fmt.Printf("Repository: %s\n", repo.RootPath)
 		fmt.Printf("Force rebuild: %v\n", forceRebuild)
 		fmt.Printf("Incremental: %v\n", incremental)
+		fmt.Println()
 	}
 
-	// TODO: Implement context building
-	fmt.Println("⚠️  Context building not yet implemented")
+	// Create detector
+	detector := context.NewDetector(repo.RootPath)
+	
+	fmt.Println("🔍 Scanning repository...")
+	result, err := detector.Detect()
+	if err != nil {
+		return fmt.Errorf("failed to detect frameworks: %w", err)
+	}
+
+	// Display results
 	fmt.Println()
-	fmt.Println("This will:")
-	fmt.Println("  1. Detect repository root")
-	fmt.Println("  2. Scan for languages and frameworks")
-	fmt.Println("  3. Parse ASTs for all source files")
-	fmt.Println("  4. Generate embeddings")
-	fmt.Println("  5. Build FAISS similarity index")
-	fmt.Println("  6. Save to .katich/context.json")
+	fmt.Println("📊 Detection Results:")
+	fmt.Println()
+
+	// Languages
+	if len(result.Languages) > 0 {
+		fmt.Println("Languages detected:")
+		for lang, count := range result.Languages {
+			fmt.Printf("  • %s (%d files)\n", lang, count)
+		}
+		fmt.Println()
+	}
+
+	// Frameworks
+	if len(result.Frameworks) > 0 {
+		fmt.Println("Frameworks detected:")
+		
+		// Group by type
+		byType := make(map[context.FrameworkType][]context.Framework)
+		for _, fw := range result.Frameworks {
+			byType[fw.Type] = append(byType[fw.Type], fw)
+		}
+
+		// Display by type
+		typeOrder := []context.FrameworkType{
+			context.FrameworkTypeBackend,
+			context.FrameworkTypeFrontend,
+			context.FrameworkTypeFullStack,
+			context.FrameworkTypeUI,
+			context.FrameworkTypeBuild,
+		}
+
+		for _, fwType := range typeOrder {
+			if frameworks, ok := byType[fwType]; ok && len(frameworks) > 0 {
+				fmt.Printf("\n  %s:\n", fwType)
+				for _, fw := range frameworks {
+					fmt.Printf("    • %s (%s)\n", fw.Name, fw.Language)
+				}
+			}
+		}
+		fmt.Println()
+	}
+
+	// Patterns
+	if len(result.Patterns) > 0 {
+		fmt.Println("Architectural patterns:")
+		for _, pattern := range result.Patterns {
+			fmt.Printf("  • %s\n", pattern)
+		}
+		fmt.Println()
+	}
+
+	// Important files
+	if len(result.Files) > 0 {
+		fmt.Println("Configuration files found:")
+		for file := range result.Files {
+			fmt.Printf("  • %s\n", file)
+		}
+		fmt.Println()
+	}
+
+	// Save context
+	fmt.Println("💾 Saving context...")
+	contextPath := filepath.Join(repo.RootPath, ".katich", "context.json")
+	
+	// Ensure directory exists
+	if err := os.MkdirAll(filepath.Dir(contextPath), 0755); err != nil {
+		return fmt.Errorf("failed to create .katich directory: %w", err)
+	}
+
+	// Marshal to JSON
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal context: %w", err)
+	}
+
+	// Write file
+	if err := os.WriteFile(contextPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write context file: %w", err)
+	}
+
+	fmt.Printf("✅ Context saved to %s\n", contextPath)
+	fmt.Println()
+	fmt.Println("Next steps:")
+	fmt.Println("  • Run 'katich context show' to view the context")
+	fmt.Println("  • Run 'katich review latest' to review code with context")
 
 	return nil
 }
@@ -92,22 +192,125 @@ func runContextShow() error {
 	fmt.Println("📊 Codebase Context")
 	fmt.Println()
 
-	// TODO: Load and display actual context
-	fmt.Println("⚠️  No context found. Run 'katich context build' first.")
+	// Find Git repository
+	repo, err := git.FindRepository()
+	if err != nil {
+		return fmt.Errorf("failed to find Git repository: %w", err)
+	}
+
+	// Load context
+	contextPath := filepath.Join(repo.RootPath, ".katich", "context.json")
+	data, err := os.ReadFile(contextPath)
+	if err != nil {
+		fmt.Println("⚠️  No context found. Run 'katich context build' first.")
+		return nil
+	}
+
+	// Parse context
+	var result context.DetectionResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		return fmt.Errorf("failed to parse context: %w", err)
+	}
+
+	// Display languages
+	if len(result.Languages) > 0 {
+		fmt.Println("Languages:")
+		for lang, count := range result.Languages {
+			fmt.Printf("  • %s (%d files)\n", lang, count)
+		}
+		fmt.Println()
+	}
+
+	// Display frameworks
+	if len(result.Frameworks) > 0 {
+		fmt.Println("Frameworks:")
+		
+		// Group by type
+		byType := make(map[context.FrameworkType][]context.Framework)
+		for _, fw := range result.Frameworks {
+			byType[fw.Type] = append(byType[fw.Type], fw)
+		}
+
+		// Display by type
+		typeOrder := []context.FrameworkType{
+			context.FrameworkTypeBackend,
+			context.FrameworkTypeFrontend,
+			context.FrameworkTypeFullStack,
+			context.FrameworkTypeUI,
+			context.FrameworkTypeBuild,
+		}
+
+		for _, fwType := range typeOrder {
+			if frameworks, ok := byType[fwType]; ok && len(frameworks) > 0 {
+				fmt.Printf("\n  %s:\n", fwType)
+				for _, fw := range frameworks {
+					fmt.Printf("    • %s (%s)\n", fw.Name, fw.Language)
+				}
+			}
+		}
+		fmt.Println()
+	}
+
+	// Display patterns
+	if len(result.Patterns) > 0 {
+		fmt.Println("Architectural Patterns:")
+		for _, pattern := range result.Patterns {
+			fmt.Printf("  • %s\n", pattern)
+		}
+		fmt.Println()
+	}
+
+	// Display files
+	if len(result.Files) > 0 {
+		fmt.Println("Configuration Files:")
+		for file := range result.Files {
+			fmt.Printf("  • %s\n", file)
+		}
+		fmt.Println()
+	}
+
+	fmt.Printf("Context file: %s\n", contextPath)
 
 	return nil
 }
 
 func runContextClear() error {
 	fmt.Println("🗑️  Clearing cached context...")
-
-	// TODO: Implement context clearing
-	fmt.Println("⚠️  Context clearing not yet implemented")
 	fmt.Println()
-	fmt.Println("This will remove:")
-	fmt.Println("  - .katich/context.json")
-	fmt.Println("  - .katich/embeddings.index")
-	fmt.Println("  - .katich/cache/")
+
+	// Find Git repository
+	repo, err := git.FindRepository()
+	if err != nil {
+		return fmt.Errorf("failed to find Git repository: %w", err)
+	}
+
+	katichDir := filepath.Join(repo.RootPath, ".katich")
+	
+	// Remove context.json
+	contextPath := filepath.Join(katichDir, "context.json")
+	if err := os.Remove(contextPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove context.json: %w", err)
+	}
+
+	// Remove embeddings.index if it exists
+	embeddingsPath := filepath.Join(katichDir, "embeddings.index")
+	if err := os.Remove(embeddingsPath); err != nil && !os.IsNotExist(err) {
+		// Not critical, just warn
+		fmt.Printf("⚠️  Could not remove embeddings.index: %v\n", err)
+	}
+
+	// Remove cache directory if it exists
+	cachePath := filepath.Join(katichDir, "cache")
+	if err := os.RemoveAll(cachePath); err != nil && !os.IsNotExist(err) {
+		fmt.Printf("⚠️  Could not remove cache directory: %v\n", err)
+	}
+
+	fmt.Println("✅ Context cleared successfully")
+	fmt.Println()
+	fmt.Println("Removed:")
+	fmt.Println("  • context.json")
+	fmt.Println("  • embeddings.index (if present)")
+	fmt.Println("  • cache/ (if present)")
 
 	return nil
 }

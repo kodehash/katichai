@@ -218,12 +218,19 @@ func (r *Repository) getFilePatchRange(rangeSpec, filePath string) (string, erro
 
 // getDiffSummary gets a summary of the diff
 func (r *Repository) getDiffSummary(ref string) (string, error) {
+	// Try with parent first
 	cmd := exec.Command("git", "diff", "--stat", fmt.Sprintf("%s^", ref), ref)
 	cmd.Dir = r.RootPath
 
 	output, err := cmd.Output()
 	if err != nil {
-		return "", err
+		// Might be initial commit, try with --root
+		cmd = exec.Command("git", "show", "--stat", "--format=", ref)
+		cmd.Dir = r.RootPath
+		output, err = cmd.Output()
+		if err != nil {
+			return "", nil // Return empty summary on error
+		}
 	}
 
 	return string(output), nil
