@@ -2,7 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
+	"github.com/katichai/katich/internal/analysis"
 	"github.com/katichai/katich/internal/git"
 	"github.com/spf13/cobra"
 )
@@ -89,6 +92,19 @@ func runReviewLatest() error {
 		fmt.Println()
 	}
 
+	// Check if context exists
+	contextPath := filepath.Join(repo.RootPath, ".katich", "context.json")
+	hasContext := false
+	if _, err := os.Stat(contextPath); err == nil {
+		hasContext = true
+		if verbose {
+			fmt.Println("✅ Context found, using for enhanced analysis")
+		}
+	} else {
+		fmt.Println("⚠️  No context found. Run 'katich context build' for better analysis.")
+		fmt.Println()
+	}
+
 	// Get latest commit
 	commit, err := repo.GetLatestCommit()
 	if err != nil {
@@ -119,18 +135,59 @@ func runReviewLatest() error {
 	}
 	fmt.Println()
 
-	// TODO: Implement actual review logic
-	fmt.Println("⚠️  AI-powered review not yet implemented")
+	// Analyze changed files
+	if hasContext {
+		fmt.Println("🔬 Analyzing changed files...")
+		changedFiles := make([]string, 0)
+		for _, file := range diff.Files {
+			changedFiles = append(changedFiles, file.Path)
+		}
+
+		analyzer := analysis.NewAnalyzer(repo.RootPath)
+		fileAnalyses, err := analyzer.AnalyzeChangedFiles(changedFiles)
+		if err != nil {
+			fmt.Printf("⚠️  Analysis error: %v\n", err)
+		} else if len(fileAnalyses) > 0 {
+			// Display analysis results
+			totalIssues := 0
+			for filePath, fileAnalysis := range fileAnalyses {
+				if len(fileAnalysis.Issues) > 0 {
+					fmt.Printf("\n📄 %s:\n", filePath)
+					for _, issue := range fileAnalysis.Issues {
+						totalIssues++
+						severity := "ℹ️"
+						if issue.Severity == analysis.SeverityWarning {
+							severity = "⚠️"
+						} else if issue.Severity == analysis.SeverityError {
+							severity = "❌"
+						}
+						fmt.Printf("  %s Line %d: %s\n", severity, issue.Line, issue.Message)
+						if issue.Suggestion != "" {
+							fmt.Printf("     💡 %s\n", issue.Suggestion)
+						}
+					}
+				}
+			}
+
+			if totalIssues == 0 {
+				fmt.Println("✅ No issues found in changed files!")
+			} else {
+				fmt.Printf("\n⚠️  Found %d issue(s) in changed files\n", totalIssues)
+			}
+		}
+		fmt.Println()
+	}
+
+	// AI-powered review placeholder
+	fmt.Println("🤖 AI-Powered Review:")
+	fmt.Println("  ⚠️  LLM-based review not yet implemented")
 	fmt.Println()
-	fmt.Println("Next steps:")
-	fmt.Println("  1. Load codebase context")
-	fmt.Println("  2. Analyze modified functions")
-	fmt.Println("  3. Generate embeddings for new code")
-	fmt.Println("  4. Search for similar code")
-	fmt.Println("  5. Run static analysis")
-	fmt.Println("  6. Detect AI-generated patterns")
-	fmt.Println("  7. Run LLM classifier")
-	fmt.Println("  8. Synthesize final review")
+	fmt.Println("  Next enhancements:")
+	fmt.Println("    • Generate embeddings for new code")
+	fmt.Println("    • Search for similar code patterns")
+	fmt.Println("    • Detect AI-generated boilerplate")
+	fmt.Println("    • Run LLM classifier")
+	fmt.Println("    • Synthesize comprehensive review")
 
 	return nil
 }

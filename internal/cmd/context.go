@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 
 	"github.com/katichai/katich/internal/analysis"
+	"github.com/katichai/katich/internal/config"
 	"github.com/katichai/katich/internal/context"
+	"github.com/katichai/katich/internal/embeddings"
 	"github.com/katichai/katich/internal/git"
 	"github.com/spf13/cobra"
 )
@@ -185,6 +187,45 @@ func runContextBuild() error {
 		}
 		fmt.Println()
 	}
+
+	// Generate embeddings
+	fmt.Println("🧠 Generating embeddings...")
+	
+	// Load config to get API keys
+	cfg, err := config.Load(GetConfig())
+	if err != nil {
+		fmt.Println("  ⚠️  No config found, using defaults")
+		cfg = config.DefaultConfig()
+	}
+
+	// Create embedding provider (hybrid)
+	provider := embeddings.NewHybridProvider(
+		"http://localhost:11434",
+		"nomic-embed-text",
+		cfg.LLM.APIKey,
+		"text-embedding-3-small",
+	)
+
+	fmt.Printf("  Using provider: %s\n", provider.GetActiveProvider())
+
+	// Generate embeddings
+	generator := embeddings.NewGenerator(provider, repo.RootPath)
+	embeddingIndex, err := generator.GenerateForAnalysis(analysisResult)
+	if err != nil {
+		fmt.Printf("  ⚠️  Failed to generate embeddings: %v\n", err)
+		fmt.Println("  Continuing without embeddings...")
+	} else {
+		fmt.Printf("  ✅ Generated %d embeddings\n", len(embeddingIndex.Embeddings))
+		
+		// Save embedding index
+		embeddingPath := filepath.Join(repo.RootPath, ".katich", "embeddings.json")
+		if err := generator.SaveIndex(embeddingIndex, embeddingPath); err != nil {
+			fmt.Printf("  ⚠️  Failed to save embeddings: %v\n", err)
+		} else {
+			fmt.Printf("  💾 Saved to %s\n", embeddingPath)
+		}
+	}
+	fmt.Println()
 
 	// Patterns
 	if len(result.Patterns) > 0 {
