@@ -5,6 +5,7 @@ import (
 
 	"github.com/katichai/katich/internal/config"
 	"github.com/katichai/katich/internal/git"
+	"github.com/katichai/katich/internal/llm"
 	"github.com/spf13/cobra"
 )
 
@@ -145,15 +146,26 @@ func runDoctor() error {
 		status string
 	}{"Configuration file", configStatus})
 
-	// Check LLM API key
+	// Check LLM API key and connection
 	llmStatus := "⚠️  Not configured (required for reviews)"
-	if cfg != nil && cfg.LLM.APIKey != "" {
-		llmStatus = fmt.Sprintf("✅ Configured (%s)", cfg.LLM.Provider)
+	if cfg != nil {
+		if cfg.LLM.Provider != "local" && cfg.LLM.Provider != "ollama" && cfg.LLM.APIKey == "" {
+			llmStatus = fmt.Sprintf("❌ Missing API key for %s", cfg.LLM.Provider)
+		} else {
+			// Try to connect
+			_, err := llm.NewClient(cfg.LLM)
+			if err != nil {
+				llmStatus = fmt.Sprintf("❌ Client init failed: %v", err)
+			} else {
+				// Client init OK
+				llmStatus = fmt.Sprintf("✅ Configured (%s)", cfg.LLM.Provider)
+			}
+		}
 	}
 	checks = append(checks, struct {
 		name   string
 		status string
-	}{"LLM API key", llmStatus})
+	}{"LLM Provider", llmStatus})
 
 	// Check embedding model
 	embeddingStatus := "⚠️  Not configured"

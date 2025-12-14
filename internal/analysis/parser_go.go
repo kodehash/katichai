@@ -1,6 +1,7 @@
 package analysis
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -31,9 +32,14 @@ func (p *GoParser) ParseFile(filePath string) (*FileAnalysis, error) {
 		return nil, fmt.Errorf("failed to parse Go file: %w", err)
 	}
 
+	// Calculate hash
+	hash := sha256.Sum256(content)
+	hashStr := fmt.Sprintf("%x", hash)
+
 	analysis := &FileAnalysis{
 		FilePath:  filePath,
 		Language:  "Go",
+		Hash:      hashStr,
 		Functions: make([]FunctionInfo, 0),
 		Classes:   make([]ClassInfo, 0),
 		Imports:   make([]ImportInfo, 0),
@@ -55,7 +61,7 @@ func (p *GoParser) ParseFile(filePath string) (*FileAnalysis, error) {
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch node := n.(type) {
 		case *ast.FuncDecl:
-			funcInfo := p.extractFunction(node, fset)
+			funcInfo := p.extractFunction(node, fset, content)
 			analysis.Functions = append(analysis.Functions, funcInfo)
 			
 			// Check for issues
@@ -95,7 +101,7 @@ func (p *GoParser) ParseFile(filePath string) (*FileAnalysis, error) {
 }
 
 // extractFunction extracts function information
-func (p *GoParser) extractFunction(funcDecl *ast.FuncDecl, fset *token.FileSet) FunctionInfo {
+func (p *GoParser) extractFunction(funcDecl *ast.FuncDecl, fset *token.FileSet, content []byte) FunctionInfo {
 	startPos := fset.Position(funcDecl.Pos())
 	endPos := fset.Position(funcDecl.End())
 
@@ -106,6 +112,13 @@ func (p *GoParser) extractFunction(funcDecl *ast.FuncDecl, fset *token.FileSet) 
 		LOC:        endPos.Line - startPos.Line + 1,
 		Parameters: make([]string, 0),
 		IsExported: funcDecl.Name.IsExported(),
+	}
+
+	// Extract body
+	startOffset := fset.Position(funcDecl.Pos()).Offset
+	endOffset := fset.Position(funcDecl.End()).Offset
+	if startOffset < len(content) && endOffset <= len(content) {
+		funcInfo.Body = string(content[startOffset:endOffset])
 	}
 
 	// Extract parameters

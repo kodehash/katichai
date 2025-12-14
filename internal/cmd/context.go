@@ -210,7 +210,7 @@ func runContextBuild() error {
 
 	// Generate embeddings
 	generator := embeddings.NewGenerator(provider, repo.RootPath)
-	embeddingIndex, err := generator.GenerateForAnalysis(analysisResult)
+	embeddingIndex, err := generator.GenerateForAnalysis(analysisResult, incremental)
 	if err != nil {
 		fmt.Printf("  ⚠️  Failed to generate embeddings: %v\n", err)
 		fmt.Println("  Continuing without embeddings...")

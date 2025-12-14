@@ -24,6 +24,7 @@ type FunctionInfo struct {
 	ReturnType string   `json:"return_type,omitempty"`
 	IsExported bool     `json:"is_exported"`
 	Comments   string   `json:"comments,omitempty"`
+	Body       string   `json:"body,omitempty"`
 }
 
 // ClassInfo represents information about a class/struct
@@ -53,6 +54,7 @@ type ImportInfo struct {
 type FileAnalysis struct {
 	FilePath   string         `json:"file_path"`
 	Language   string         `json:"language"`
+	Hash       string         `json:"hash"`
 	Metrics    CodeMetrics    `json:"metrics"`
 	Functions  []FunctionInfo `json:"functions"`
 	Classes    []ClassInfo    `json:"classes"`
@@ -62,6 +64,7 @@ type FileAnalysis struct {
 
 // Issue represents a code quality issue
 type Issue struct {
+	File        string    `json:"file,omitempty"` // Added for context
 	Type        IssueType `json:"type"`
 	Severity    Severity  `json:"severity"`
 	Line        int       `json:"line"`
@@ -80,6 +83,7 @@ const (
 	IssueTypeDuplication     IssueType = "duplication"
 	IssueTypeUnusedCode      IssueType = "unused_code"
 	IssueTypeStyleViolation  IssueType = "style_violation"
+	IssueTypeAIGenerated     IssueType = "ai_generated"
 )
 
 // Severity indicates issue severity

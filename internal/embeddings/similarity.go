@@ -129,8 +129,13 @@ func NewDuplicateDetector(index *EmbeddingIndex, provider EmbeddingProvider, thr
 	}
 }
 
-// DetectDuplicates detects if new code is duplicate
+// DetectDuplicates detects if new code is duplicate using default threshold
 func (d *DuplicateDetector) DetectDuplicates(code, filePath, funcName string) ([]SimilarityResult, error) {
+	return d.DetectDuplicatesWithThreshold(code, filePath, funcName, d.threshold)
+}
+
+// DetectDuplicatesWithThreshold detects duplicates with custom threshold
+func (d *DuplicateDetector) DetectDuplicatesWithThreshold(code, filePath, funcName string, threshold float32) ([]SimilarityResult, error) {
 	// Generate embedding for new code
 	embedding, err := d.provider.GenerateEmbedding(code)
 	if err != nil {
@@ -138,7 +143,7 @@ func (d *DuplicateDetector) DetectDuplicates(code, filePath, funcName string) ([
 	}
 
 	// Find duplicates
-	duplicates := d.search.FindDuplicates(embedding, d.threshold, "")
+	duplicates := d.search.FindDuplicates(embedding, threshold, "")
 
 	// Filter out the same file/function
 	filtered := make([]SimilarityResult, 0)

@@ -24,10 +24,11 @@ type CodeEmbedding struct {
 
 // EmbeddingIndex stores all embeddings
 type EmbeddingIndex struct {
-	Embeddings []CodeEmbedding `json:"embeddings"`
-	Dimension  int             `json:"dimension"`
-	Provider   string          `json:"provider"`
-	Version    string          `json:"version"`
+	Embeddings []CodeEmbedding   `json:"embeddings"`
+	FileHashes map[string]string `json:"file_hashes"`
+	Dimension  int               `json:"dimension"`
+	Provider   string            `json:"provider"`
+	Version    string            `json:"version"`
 }
 
 // Generator generates embeddings for code
@@ -45,9 +46,24 @@ func NewGenerator(provider EmbeddingProvider, rootPath string) *Generator {
 }
 
 // GenerateForAnalysis generates embeddings for analyzed code
-func (g *Generator) GenerateForAnalysis(analysisResult *analysis.AnalysisResult) (*EmbeddingIndex, error) {
+// GenerateForAnalysis generates embeddings for analyzed code
+func (g *Generator) GenerateForAnalysis(analysisResult *analysis.AnalysisResult, incremental bool) (*EmbeddingIndex, error) {
+	// Try to load existing index for incremental update
+	var existingIndex *EmbeddingIndex
+	if incremental {
+		indexPath := filepath.Join(g.rootPath, ".katich", "embeddings.json")
+		var err error
+		existingIndex, err = LoadIndex(indexPath)
+		if err != nil {
+			// If loading fails, just treat as full rebuild
+			fmt.Printf("  ⚠️  Could not load existing index for incremental update: %v\n", err)
+			existingIndex = nil
+		}
+	}
+
 	index := &EmbeddingIndex{
 		Embeddings: make([]CodeEmbedding, 0),
+		FileHashes: make(map[string]string),
 		Dimension:  g.provider.GetDimension(),
 		Provider:   g.provider.GetName(),
 		Version:    "1.0",
@@ -59,8 +75,42 @@ func (g *Generator) GenerateForAnalysis(analysisResult *analysis.AnalysisResult)
 	}
 
 	processed := 0
+	reused := 0
+	generated := 0
+
 	for filePath, fileAnalysis := range analysisResult.Files {
-		// Generate embeddings for each function
+		// Update hash map
+		index.FileHashes[filePath] = fileAnalysis.Hash
+
+		// Check if file is unchanged
+		isUnchanged := false
+		if existingIndex != nil {
+			if oldHash, ok := existingIndex.FileHashes[filePath]; ok {
+				if oldHash == fileAnalysis.Hash {
+					isUnchanged = true
+				}
+			}
+		}
+
+		if isUnchanged {
+			// Reuse embeddings for this file
+			foundEmbeddings := false
+			for _, emb := range existingIndex.Embeddings {
+				if emb.FilePath == filePath {
+					index.Embeddings = append(index.Embeddings, emb)
+					foundEmbeddings = true
+				}
+			}
+			
+			// If we successfully reused embeddings, skip generation
+			if foundEmbeddings {
+				reused += len(fileAnalysis.Functions)
+				processed += len(fileAnalysis.Functions)
+				continue
+			}
+		}
+
+		// Generate embeddings for each function in this file
 		for _, fn := range fileAnalysis.Functions {
 			// Create code snippet for embedding
 			codeSnippet := g.createCodeSnippet(fn, fileAnalysis.Language)
@@ -87,14 +137,16 @@ func (g *Generator) GenerateForAnalysis(analysisResult *analysis.AnalysisResult)
 
 			index.Embeddings = append(index.Embeddings, codeEmb)
 			processed++
+			generated++
 
 			// Progress indicator
 			if processed%10 == 0 {
-				fmt.Printf("  Generated %d/%d embeddings...\n", processed, totalFunctions)
+				fmt.Printf("  Processed %d/%d (Generated: %d, Reused: %d)...\n", processed, totalFunctions, generated, reused)
 			}
 		}
 	}
 
+	fmt.Printf("  Finished: Generated %d, Reused %d embeddings\n", generated, reused)
 	return index, nil
 }
 

@@ -1,6 +1,8 @@
 package analysis
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,13 +12,15 @@ import (
 
 // Analyzer performs static analysis on code files
 type Analyzer struct {
-	rootPath string
+	rootPath   string
+	aiDetector *AICodeDetector
 }
 
 // NewAnalyzer creates a new analyzer
 func NewAnalyzer(rootPath string) *Analyzer {
 	return &Analyzer{
-		rootPath: rootPath,
+		rootPath:   rootPath,
+		aiDetector: NewAICodeDetector(),
 	}
 }
 
@@ -114,20 +118,41 @@ func (a *Analyzer) AnalyzeRepository() (*AnalysisResult, error) {
 func (a *Analyzer) analyzeFile(filePath string) (*FileAnalysis, error) {
 	lang := context.DetectLanguage(filePath)
 
+	var fileAnalysis *FileAnalysis
+	var err error
+
 	switch lang {
 	case context.LanguageGo:
 		parser := NewGoParser()
-		return parser.ParseFile(filePath)
+		fileAnalysis, err = parser.ParseFile(filePath)
 	
 	// Add more language parsers here
 	// case context.LanguageJavaScript, context.LanguageTypeScript:
 	//     parser := NewJSParser()
-	//     return parser.ParseFile(filePath)
+	//     fileAnalysis, err = parser.ParseFile(filePath)
 	
 	default:
 		// For unsupported languages, do basic analysis
-		return a.basicAnalysis(filePath, string(lang))
+		fileAnalysis, err = a.basicAnalysis(filePath, string(lang))
 	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Run AI detection
+	patterns := a.aiDetector.DetectAIPatterns(fileAnalysis)
+	for _, pattern := range patterns {
+		fileAnalysis.Issues = append(fileAnalysis.Issues, Issue{
+			Type:     IssueTypeAIGenerated,
+			Severity: SeverityWarning,
+			Line:     pattern.StartLine,
+			Message:  fmt.Sprintf("%s: %s", pattern.Pattern, strings.Join(pattern.Indicators, ", ")),
+			Suggestion: "Review code for potential AI hallucinations or over-engineering",
+		})
+	}
+
+	return fileAnalysis, nil
 }
 
 // basicAnalysis performs basic analysis for unsupported languages
@@ -139,9 +164,14 @@ func (a *Analyzer) basicAnalysis(filePath string, language string) (*FileAnalysi
 
 	metrics := CalculateBasicMetrics(string(content))
 
+	// Calculate hash
+	hash := sha256.Sum256(content)
+	hashStr := fmt.Sprintf("%x", hash)
+
 	return &FileAnalysis{
 		FilePath:  filePath,
 		Language:  language,
+		Hash:      hashStr,
 		Metrics:   metrics,
 		Functions: make([]FunctionInfo, 0),
 		Classes:   make([]ClassInfo, 0),

@@ -133,7 +133,7 @@ func (c *Config) Validate() error {
 	if c.LLM.Provider == "" {
 		return fmt.Errorf("LLM provider is required")
 	}
-	if c.LLM.Provider != "local" && c.LLM.APIKey == "" {
+	if c.LLM.Provider != "local" && c.LLM.Provider != "ollama" && c.LLM.APIKey == "" {
 		return fmt.Errorf("LLM API key is required for provider: %s", c.LLM.Provider)
 	}
 

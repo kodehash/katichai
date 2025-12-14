@@ -2,103 +2,142 @@
 
 **Context-aware, AI-assisted code review CLI tool**
 
-Katichai prevents unnecessary AI-generated code, detects duplicated logic, enforces architectural patterns, and ensures high-quality engineering standards.
+Katichai prevents unnecessary AI-generated code, detects duplicated logic, enforces architectural patterns, and ensures high-quality engineering standards. It is designed to run locally or in CI/CD pipelines, providing engineering teams with an automated senior engineer's perspective.
 
-## Features
+## 🚀 Key Features
 
-- 🧠 **Semantic Code Understanding** - Builds deep context of your codebase using embeddings and static analysis
-- 🔍 **AI Code Detection** - Identifies unnecessary AI-generated boilerplate and verbose code
-- 🔄 **Duplicate Detection** - Finds exact and semantic code duplication across your repository
-- 🏗️ **Architecture Enforcement** - Detects frameworks and enforces their conventions
-- 🌐 **Multi-Language Support** - Works with Go, Java, Python, JavaScript, TypeScript, and more
-- 🚀 **Offline-First** - Runs locally with minimal LLM usage
+*   🧠 **Smart Change Classification**: Automatically detects if a change is `LOGIC`, `BOILERPLATE`, `REFACTOR`, or `DOCS` before deep review.
+*   🔍 **Exact & Semantic Duplication**:
+    *   **Exact**: Finds copy-pasted code blocks instantly using hashing.
+    *   **Semantic**: Uses vector embeddings to find similar logic even if implemented differently.
+*   ♻️ **Refactoring Suggestions**: Identifies "Reuse Candidates" (70-85% similarity) where you should use existing functions instead of writing new ones.
+*   📉 **Code Drift Detection**: Flags inconsistencies in style, variable naming (e.g., `snake_case` in Go), and error handling patterns.
+*   🤖 **AI Pattern Detection**: Identifies "AI Slop"—overly verbose, generic, or hallucinated code typical of LLM generation.
+*   🏗️ **Architecture Enforcement**: Understands your framework (Spring, Next.js, FastAPI, Gin) and flags violations (e.g., calling DB from Controller).
+*   🌐 **Multi-Language**: Native support for **Go, Java, Python, TypeScript, JavaScript**.
+*   🔐 **Local & Secure**: Analyzes changes locally. Interaction with LLMs is configurable (OpenAI, Anthropic, or Local Ollama).
 
-## Installation
+## 🛠️ CLI Setup
+
+### Prerequisites
+*   **Go 1.22+** installed.
+*   **Git** installed.
+*   (Optional) **Ollama** for local embeddings/LLM.
+
+### Installation
 
 ```bash
-# Coming soon
-go install github.com/katichai/katich@latest
+# Clone the repository
+git clone https://github.com/katichai/katich.git
+cd katich
+
+# Install dependencies and build
+go mod download
+go build -o katich cmd/katich/main.go
+
+# Move to path (optional)
+mv katich /usr/local/bin/
 ```
 
-## Quick Start
+### Configuration
+Create a `.katich/config.yaml` in your home directory or project root.
 
-```bash
-# Build codebase context
-katich context build
-
-# Review latest commit
-katich review latest
-
-# Review a specific diff range
-katich review diff HEAD~3..HEAD
-
-# Review in CI mode
-katich review --ci
-```
-
-## Supported Frameworks
-
-- **Java**: Spring Boot
-- **JavaScript/TypeScript**: Express, Next.js, React
-- **Python**: FastAPI
-- **Go**: Gin
-
-## How It Works
-
-1. **Context Building**: Scans your repository, detects frameworks, parses ASTs, and generates embeddings
-2. **Diff Analysis**: Extracts changes from Git and analyzes modified functions
-3. **Similarity Search**: Compares new code against existing codebase using FAISS
-4. **AI Detection**: Uses heuristics and small LLM classifiers to detect AI-generated patterns
-5. **Review Synthesis**: Combines static analysis with LLM reasoning for high-signal reviews
-
-## Commands
-
-### Context Commands
-- `katich context build` - Build codebase context and embeddings
-- `katich context show` - Display current context information
-- `katich context clear` - Clear cached context
-
-### Review Commands
-- `katich review latest` - Review the latest commit
-- `katich review diff <range>` - Review a specific commit range
-- `katich review file <path>` - Review a specific file
-- `katich review --ci` - Run in CI mode (exits with error code on issues)
-
-### Utility Commands
-- `katich doctor` - Check system requirements and configuration
-- `katich version` - Display version information
-
-## Configuration
-
-Create a `.katich/config.yaml` file:
-
+#### 1. Local LLM (Ollama) - Recommended for Privacy
 ```yaml
 llm:
-  provider: openai  # openai, anthropic, or local
-  api_key: your-api-key
-  model: gpt-4
+  provider: ollama
+  model: llama3
+  base_url: http://localhost:11434  # Default
 
 embeddings:
-  model: jina-code-v2  # jina-code-v2, bge-code, nomic-embed, snowflake-arctic
-
-analysis:
-  max_function_length: 50
-  complexity_threshold: 10
-  similarity_threshold: 0.85
+  provider: ollama
+  model: nomic-embed-text
 ```
 
-## Development Status
+#### 2. OpenAI (GPT-4)
+```yaml
+llm:
+  provider: openai
+  model: gpt-4o
+  api_key: sk-...  # Or set via ENV: KATICH_LLM_API_KEY
 
-🚧 **Currently in active development** - See [tasks.md](tasks.md) for progress
+embeddings:
+  provider: openai
+  model: text-embedding-3-small
+```
+
+#### 3. Anthropic (Claude 3)
+```yaml
+llm:
+  provider: anthropic
+  model: claude-3-opus-20240229
+  api_key: sk-ant-...
+
+embeddings:
+  provider: openai  # Anthropic doesn't support embeddings yet, use OpenAI or Local
+  model: text-embedding-3-small
+```
+
+## ⚡ Quick Start
+
+1.  **Initialize Context**: First, let Katichai learn your codebase.
+    ```bash
+    katich context build
+    ```
+
+2.  **Review Changes**: Run a review on your current work.
+    ```bash
+    katich review latest
+    ```
+
+3.  **Review Specific Diff**:
+    ```bash
+    katich review diff main..feature-branch
+    ```
+
+## 📝 Example Output
+
+When running `katich review latest`:
+
+```markdown
+# Code Review Report
+
+## Summary
+The changes introduce a new `UserService` but duplicate logic from `AuthService` and violate the project's error handling patterns.
+
+## 🚨 Critical Issues
+- **[ARCH]** Direct database access in `UserController.go`. Use the Repository pattern.
+- **[SECURITY]** Hardcoded secret detected in `config.go`.
+- **[DUPLICATION]** `ValidateEmail` (User.go) is an exact duplicate of `AuthUtils.go:45`.
+
+## ♻️ Refactoring Opportunities
+- **Reuse Candidate**: `GenerateToken` is 82% similar to `SessionManager.CreateToken`. Consider reusing.
+
+## ⚠️ Code Drift
+- **Naming**: `user_id` (snake_case) used locally; project standard is `userID` (camelCase).
+
+## Score: 65/100 (Request Changes)
+```
+
+## 💻 Code Setup (For Contributors)
+
+If you want to contribute to Katichai:
+
+1.  **Repository Structure**:
+    *   `cmd/katich`: CLI entrypoints.
+    *   `internal/analysis`: Static analysis, AST parsing, and Heuristics.
+    *   `internal/review`: Review orchestration, Engine, Reviewer.
+    *   `internal/llm`: LLM client, Prompts, Classifier.
+    *   `internal/embeddings`: Vector storage (FAISS-like), Similarity search.
+
+2.  **Running Tests**:
+    ```bash
+    go test ./...
+    ```
+
+3.  **Adding a New Detector**:
+    *   Implement detection logic in `internal/analysis`.
+    *   Register it in `internal/review/engine.go`.
 
 ## License
-
 MIT
-
-## Contributing
-
-Contributions welcome! Please read our contributing guidelines first.
-
----
-
-Built with ❤️ by the Katichai team
