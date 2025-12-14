@@ -4,7 +4,7 @@
 *.dll
 *.so
 *.dylib
-
+.katich/
 # Test binary, built with `go test -c`
 *.test
 
@@ -36,6 +36,7 @@ Thumbs.db
 # Katich specific
 .katich/context.json
 .katich/embeddings.index
+.katich/embeddings.json
 .katich/cache/
 
 # Environment variables
