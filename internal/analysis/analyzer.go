@@ -122,14 +122,30 @@ func (a *Analyzer) analyzeFile(filePath string) (*FileAnalysis, error) {
 	var err error
 
 	switch lang {
+
 	case context.LanguageGo:
 		parser := NewGoParser()
 		fileAnalysis, err = parser.ParseFile(filePath)
 	
-	// Add more language parsers here
-	// case context.LanguageJavaScript, context.LanguageTypeScript:
-	//     parser := NewJSParser()
-	//     fileAnalysis, err = parser.ParseFile(filePath)
+	case context.LanguageJava:
+		parser := NewRegexParser(string(context.LanguageJava))
+		fileAnalysis, err = parser.ParseFile(filePath)
+
+	case context.LanguageCSharp:
+		parser := NewRegexParser(string(context.LanguageCSharp))
+		fileAnalysis, err = parser.ParseFile(filePath)
+
+	case context.LanguageJavaScript:
+		parser := NewRegexParser(string(context.LanguageJavaScript))
+		fileAnalysis, err = parser.ParseFile(filePath)
+		
+	case context.LanguageTypeScript:
+		parser := NewRegexParser(string(context.LanguageTypeScript))
+		fileAnalysis, err = parser.ParseFile(filePath)
+		
+	case context.LanguagePython:
+		parser := NewRegexParser(string(context.LanguagePython))
+		fileAnalysis, err = parser.ParseFile(filePath)
 	
 	default:
 		// For unsupported languages, do basic analysis

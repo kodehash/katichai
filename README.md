@@ -80,7 +80,12 @@ embeddings:
 
 ## ⚡ Quick Start
 
-1.  **Initialize Context**: First, let Katichai learn your codebase.
+1.  **Initialize**: Set up configuration (creates `.katich/config.yaml`).
+    ```bash
+    katich init
+    ```
+
+2.  **Initialize Context**: First, let Katichai learn your codebase.
     ```bash
     katich context build
     ```
