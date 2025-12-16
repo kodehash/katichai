@@ -38,6 +38,7 @@ func runInit() {
   provider: ollama
   model: llama3
   base_url: http://localhost:11434
+  max_input_tokens: 20000
 
 embeddings:
   provider: ollama
@@ -47,6 +48,16 @@ analysis:
   max_function_length: 50
   complexity_threshold: 10
   similarity_threshold: 0.85
+  min_duplicate_lines: 5      # Minimum 5 lines to flag as duplicate
+  duplicate_threshold: 0.90   # 90% similarity = duplicate
+  refactor_threshold: 0.80    # 80% similarity = refactor opportunity
+  sampling:
+    enabled: true
+    max_files: 20
+    context_lines: 2
+    skip_generated: true
+    skip_tests: false
+    adaptive_budget: true
 `
 
 	// Write config file

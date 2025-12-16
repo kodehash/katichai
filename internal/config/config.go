@@ -17,10 +17,11 @@ type Config struct {
 
 // LLMConfig contains LLM provider settings
 type LLMConfig struct {
-	Provider string `yaml:"provider"` // openai, anthropic, local
-	APIKey   string `yaml:"api_key"`
-	Model    string `yaml:"model"`
-	BaseURL  string `yaml:"base_url,omitempty"` // for local LLMs
+	Provider       string `yaml:"provider"`        // openai, anthropic, local
+	APIKey         string `yaml:"api_key"`
+	Model          string `yaml:"model"`
+	BaseURL        string `yaml:"base_url,omitempty"`     // for local LLMs
+	MaxInputTokens int    `yaml:"max_input_tokens,omitempty"` // max tokens for input (default: 20000)
 }
 
 // EmbeddingsConfig contains embedding model settings
@@ -32,17 +33,32 @@ type EmbeddingsConfig struct {
 
 // AnalysisConfig contains code analysis thresholds
 type AnalysisConfig struct {
-	MaxFunctionLength   int     `yaml:"max_function_length"`
-	ComplexityThreshold int     `yaml:"complexity_threshold"`
-	SimilarityThreshold float64 `yaml:"similarity_threshold"`
+	MaxFunctionLength     int            `yaml:"max_function_length"`
+	ComplexityThreshold   int            `yaml:"complexity_threshold"`
+	SimilarityThreshold   float64        `yaml:"similarity_threshold"`
+	MinDuplicateLines     int            `yaml:"min_duplicate_lines"`     // Minimum lines for duplicate detection (default: 5)
+	DuplicateThreshold    float64        `yaml:"duplicate_threshold"`     // Threshold for exact duplicates (default: 0.90)
+	RefactorThreshold     float64        `yaml:"refactor_threshold"`      // Threshold for refactoring opportunities (default: 0.80)
+	Sampling              SamplingConfig `yaml:"sampling,omitempty"`
+}
+
+// SamplingConfig contains diff sampling settings
+type SamplingConfig struct {
+	Enabled        bool `yaml:"enabled"`          // enable smart sampling (default: true)
+	MaxFiles       int  `yaml:"max_files"`        // max files to review (default: 20)
+	ContextLines   int  `yaml:"context_lines"`    // context lines to keep (default: 2)
+	SkipGenerated  bool `yaml:"skip_generated"`   // skip generated files (default: true)
+	SkipTests      bool `yaml:"skip_tests"`       // skip test files (default: false)
+	AdaptiveBudget bool `yaml:"adaptive_budget"`  // dynamically adjust based on context (default: true)
 }
 
 // DefaultConfig returns a configuration with sensible defaults
 func DefaultConfig() *Config {
 	return &Config{
 		LLM: LLMConfig{
-			Provider: "openai",
-			Model:    "gpt-4",
+			Provider:       "openai",
+			Model:          "gpt-4",
+			MaxInputTokens: 20000,
 		},
 		Embeddings: EmbeddingsConfig{
 			Model:    "jina-code-v2",
@@ -52,6 +68,17 @@ func DefaultConfig() *Config {
 			MaxFunctionLength:   50,
 			ComplexityThreshold: 10,
 			SimilarityThreshold: 0.85,
+			MinDuplicateLines:   5,     // Minimum 5 lines to flag duplicate
+			DuplicateThreshold:  0.90,  // 90% similarity for duplicates
+			RefactorThreshold:   0.80,  // 80% similarity for refactor opportunities
+			Sampling: SamplingConfig{
+				Enabled:        true,
+				MaxFiles:       20,
+				ContextLines:   2,
+				SkipGenerated:  true,
+				SkipTests:      false,
+				AdaptiveBudget: true,
+			},
 		},
 	}
 }

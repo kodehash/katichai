@@ -191,7 +191,8 @@ func runReviewDiff(diffRange string) error {
 			fmt.Printf("  • %s is similar to:\n", source)
 			for _, dup := range dups {
 				level := embeddings.GetSimilarityLevel(dup.Similarity)
-				fmt.Printf("    - %s:%s (%.1f%% - %s)\n", dup.FilePath, dup.FuncName, dup.Similarity*100, level)
+				dupLOC := dup.EndLine - dup.StartLine + 1
+				fmt.Printf("    - %s:%s (%.1f%% - %s, %d lines)\n", dup.FilePath, dup.FuncName, dup.Similarity*100, level, dupLOC)
 			}
 		}
 	}

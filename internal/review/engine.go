@@ -73,10 +73,22 @@ func (e *ReviewEngine) Review(diff *git.Diff) (*ReviewReport, error) {
 	driftDetector := analysis.NewDriftDetector()
 	exactDupDetector := analysis.NewExactDuplicationDetector()
 
+	// Create a map of actually changed files for validation
+	changedFileMap := make(map[string]bool)
+	for _, file := range diff.Files {
+		if file.Additions > 0 || file.Deletions > 0 {
+			changedFileMap[file.Path] = true
+		}
+	}
+
 	// Populate exact match index (should be done from context in real app, here we demo on local files)
 	// For now we skip repo-wide indexing for speed and just check self-duplication in diff for demo
 
 	for path, fAnalysis := range localResult.FileAnalysis {
+		// Extra safety: only include issues from files that actually changed
+		if !changedFileMap[path] {
+			continue
+		}
 		// Run Drift Detection
 		// We need the raw content, which we'd get from Git or fAnalysis if it stored it
 		// For now we assume we can read the file or Analysis has Body. 
@@ -134,9 +146,60 @@ func (e *ReviewEngine) Review(diff *git.Diff) (*ReviewReport, error) {
 		}
 	}
 
-	// 3. Build Review Context for LLM
-	// We construct the raw diff string from the git.Diff object
-	diffString := formatDiff(diff)
+	// 3. Calculate Token Budget and Sample Diff
+	// Estimate context tokens first
+	contextTokens := llm.EstimateTokens(llm.SystemPrompt)
+	
+	// Build preliminary context to estimate its size
+	prelimCtx := llm.ReviewContext{
+		Frameworks:     []string{}, // TODO: Load from context.json if available
+		Languages:      detectLanguages(diff),
+		StaticIssues:   staticIssues[:min(len(staticIssues), 10)], // Limit static issues for estimate
+		SimilarCode:    duplicateWarnings[:min(len(duplicateWarnings), 5)],
+		FileContext:    summarizeFiles(diff),
+		Classification: fmt.Sprintf("%s (Confidence: %.2f)", classification.Type, classification.Confidence),
+	}
+	prelimPrompt := e.pmtBuilder.BuildReviewPrompt(prelimCtx)
+	contextTokens += llm.EstimateTokens(prelimPrompt) - llm.EstimateTokens(formatDiff(diff)) // Subtract placeholder diff
+	
+	// Calculate available budget for diff
+	diffBudget := TOTAL_INPUT_BUDGET - contextTokens - BUFFER_TOKENS
+	if diffBudget < 1000 {
+		diffBudget = 1000 // Minimum
+	}
+	if diffBudget > 16000 {
+		diffBudget = 16000 // Maximum
+	}
+	
+	// Sample the diff using intelligent sampling
+	sampler := NewDiffSampler(diffBudget)
+	sampledDiff, samplingReport := sampler.SampleDiff(diff, localResult.FileAnalysis)
+	
+	// Display sampling report to user
+	fmt.Println("\n📊 Sampling Report:")
+	fmt.Printf("  • Total files changed: %d\n", samplingReport.TotalFiles)
+	fmt.Printf("  • Filtered: %d (", samplingReport.FilteredFiles)
+	reasons := []string{}
+	for reason, count := range samplingReport.FilteredReasons {
+		reasons = append(reasons, fmt.Sprintf("%s: %d", reason, count))
+	}
+	fmt.Printf("%s)\n", strings.Join(reasons, ", "))
+	fmt.Printf("  • Reviewing: %d files\n", samplingReport.SampledFiles)
+	fmt.Printf("  • Token reduction: %s\n", samplingReport.Summary())
+	
+	if len(samplingReport.TopRiskFiles) > 0 {
+		fmt.Println("\n🔴 High Priority Files:")
+		for i, risk := range samplingReport.TopRiskFiles {
+			if i >= 5 {
+				break
+			}
+			fmt.Printf("  • %s (Risk: %d) - %s\n", risk.File.Path, risk.Score, strings.Join(risk.Reasons, ", "))
+		}
+	}
+	fmt.Println()
+	
+	// 4. Build Review Context for LLM with sampled diff
+	diffString := sampledDiff.Format()
 	
 	reviewCtx := llm.ReviewContext{
 		Diff:           diffString,
@@ -144,15 +207,28 @@ func (e *ReviewEngine) Review(diff *git.Diff) (*ReviewReport, error) {
 		Languages:      detectLanguages(diff),
 		StaticIssues:   staticIssues,
 		SimilarCode:    duplicateWarnings,
-		FileContext:    summarizeFiles(diff),
+		FileContext:    fmt.Sprintf("%s (Sampled: %d/%d files)", summarizeFiles(diff), samplingReport.SampledFiles, samplingReport.TotalFiles),
 		Classification: fmt.Sprintf("%s (Confidence: %.2f)", classification.Type, classification.Confidence),
 	}
 
-	// 4. Generate Prompt
+	// 5. Generate Prompt
 	prompt := e.pmtBuilder.BuildReviewPrompt(reviewCtx)
 	
-	// 5. Query LLM
+	// 6. Final token validation
+	totalTokens := llm.EstimateTokens(llm.SystemPrompt) + llm.EstimateTokens(prompt)
+	if totalTokens > TOTAL_INPUT_BUDGET {
+		return nil, fmt.Errorf("input too large after sampling (%d tokens, limit: %d). Try committing smaller changes", totalTokens, TOTAL_INPUT_BUDGET)
+	}
+	
+	fmt.Printf("📏 Token usage: %d/%d (System: ~%d, Context: ~%d, Diff: ~%d)\n\n", 
+		totalTokens, TOTAL_INPUT_BUDGET,
+		llm.EstimateTokens(llm.SystemPrompt),
+		llm.EstimateTokens(prompt) - llm.EstimateTokens(diffString),
+		llm.EstimateTokens(diffString))
+	
+	// 7. Query LLM
 	// We'll use a large context window for the review
+	fmt.Println("🤖 Querying LLM for review...")
 	resp, err := e.llmClient.GenerateCompletion(context.Background(), llm.CompletionRequest{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: llm.SystemPrompt},
@@ -165,7 +241,7 @@ func (e *ReviewEngine) Review(diff *git.Diff) (*ReviewReport, error) {
 		return nil, fmt.Errorf("LLM review failed: %w", err)
 	}
 
-	// 6. Synthesize Report
+	// 8. Synthesize Report
 	report := e.synthesizer.Synthesize(resp.Content, staticIssues, duplicateWarnings)
 
 	return report, nil

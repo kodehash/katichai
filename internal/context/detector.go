@@ -75,7 +75,8 @@ func (d *Detector) scanRepository() ([]string, error) {
 		// Skip hidden directories and common ignore patterns
 		if info.IsDir() {
 			name := info.Name()
-			if strings.HasPrefix(name, ".") || 
+			// Skip all hidden directories (starting with .)
+			if strings.HasPrefix(name, ".") ||
 			   name == "node_modules" || 
 			   name == "vendor" || 
 			   name == "dist" || 
@@ -87,10 +88,13 @@ func (d *Detector) scanRepository() ([]string, error) {
 			return nil
 		}
 
-		// Only include source files
+		// Only include source files (skip hidden files)
 		if IsSourceFile(path) {
 			relPath, _ := filepath.Rel(d.rootPath, path)
-			files = append(files, relPath)
+			// Skip hidden files (starting with .)
+			if !strings.HasPrefix(filepath.Base(path), ".") && !strings.Contains(relPath, "/.") {
+				files = append(files, relPath)
+			}
 		}
 
 		return nil
