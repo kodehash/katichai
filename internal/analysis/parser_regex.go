@@ -136,6 +136,7 @@ func (p *RegexParser) ParseFile(filePath string) (*FileAnalysis, error) {
 				// Basic Complexity Check (count branching keywords)
 				fn.Complexity = p.calculateComplexity(fn.Body)
 				
+				
 				analysis.Functions = append(analysis.Functions, fn)
 			}
 		}

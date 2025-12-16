@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"github.com/katichai/katich/internal/config"
-	"github.com/katichai/katich/internal/embeddings"
 	"github.com/katichai/katich/internal/git"
 	"github.com/katichai/katich/internal/review"
 	"github.com/spf13/cobra"
@@ -161,6 +160,10 @@ func runReviewDiff(diffRange string) error {
 	if err != nil {
 		return fmt.Errorf("failed to find Git repository: %w", err)
 	}
+	
+	if verbose {
+		fmt.Printf("Repository: %s\n", repo.RootPath)
+	}
 
 	// Load config
 	cfg, err := config.Load(GetConfig())
@@ -168,8 +171,14 @@ func runReviewDiff(diffRange string) error {
 		cfg = config.DefaultConfig()
 	}
 
-	// Initialize reviewer
-	reviewer := review.NewReviewer(repo.RootPath, cfg)
+	// Initialize legacy reviewer (used by Engine)
+	baseReviewer := review.NewReviewer(repo.RootPath, cfg)
+	
+	// Initialize Review Engine
+	engine, err := review.NewEngine(cfg, baseReviewer)
+	if err != nil {
+		return fmt.Errorf("failed to initialize review engine: %w", err)
+	}
 
 	// Get diff for range
 	diff, err := repo.GetDiffRange(diffRange)
@@ -177,24 +186,41 @@ func runReviewDiff(diffRange string) error {
 		return fmt.Errorf("failed to get diff: %w", err)
 	}
 
-	// Run review
-	result, err := reviewer.ReviewDiff(diff)
+	// Run comprehensive review
+	fmt.Println("🤖 Analyzing code changes with AI...")
+	report, err := engine.Review(diff)
 	if err != nil {
 		return fmt.Errorf("review failed: %w", err)
 	}
 
-	// TODO: Share display logic with runReviewLatest (removed for brevity of this edit)
-	// Display Duplicates
-	if len(result.Duplicates) > 0 {
-		fmt.Println("\n👯 Potential Duplicates Detected:")
-		for source, dups := range result.Duplicates {
-			fmt.Printf("  • %s is similar to:\n", source)
-			for _, dup := range dups {
-				level := embeddings.GetSimilarityLevel(dup.Similarity)
-				dupLOC := dup.EndLine - dup.StartLine + 1
-				fmt.Printf("    - %s:%s (%.1f%% - %s, %d lines)\n", dup.FilePath, dup.FuncName, dup.Similarity*100, level, dupLOC)
-			}
+	// Output Result
+	formatter := review.NewFormatter()
+	var output string
+	
+	switch outputFormat {
+	case "json":
+		output = formatter.FormatJSON(report)
+	case "markdown":
+		output = formatter.FormatMarkdown(report)
+	case "terminal":
+		fallthrough
+	default:
+		output = formatter.FormatText(report)
+	}
+
+	// Print or Write to file
+	if outputFile != "" {
+		if err := writeToFile(outputFile, output); err != nil {
+			return err
 		}
+		fmt.Printf("✅ Report saved to %s\n", outputFile)
+	} else {
+		fmt.Println(output)
+	}
+
+	// Verify status for CI/CD
+	if ciMode && report.Status == "FAIL" {
+		return fmt.Errorf("review failed with score %d", report.Score)
 	}
 
 	return nil

@@ -185,7 +185,6 @@ func (e *ReviewEngine) Review(diff *git.Diff) (*ReviewReport, error) {
 	}
 	fmt.Printf("%s)\n", strings.Join(reasons, ", "))
 	fmt.Printf("  • Reviewing: %d files\n", samplingReport.SampledFiles)
-	fmt.Printf("  • Token reduction: %s\n", samplingReport.Summary())
 	
 	if len(samplingReport.TopRiskFiles) > 0 {
 		fmt.Println("\n🔴 High Priority Files:")
@@ -201,14 +200,23 @@ func (e *ReviewEngine) Review(diff *git.Diff) (*ReviewReport, error) {
 	// 4. Build Review Context for LLM with sampled diff
 	diffString := sampledDiff.Format()
 	
+	// Extract AI-generated files for focused review
+	aiGeneratedFiles := make([]*analysis.AIFileScore, 0)
+	for _, fAnalysis := range localResult.FileAnalysis {
+		if fAnalysis.AIScore != nil && fAnalysis.AIScore.AIPercentage > 0 {
+			aiGeneratedFiles = append(aiGeneratedFiles, fAnalysis.AIScore)
+		}
+	}
+	
 	reviewCtx := llm.ReviewContext{
-		Diff:           diffString,
-		Frameworks:     []string{}, // TODO: Load from context.json if available
-		Languages:      detectLanguages(diff),
-		StaticIssues:   staticIssues,
-		SimilarCode:    duplicateWarnings,
-		FileContext:    fmt.Sprintf("%s (Sampled: %d/%d files)", summarizeFiles(diff), samplingReport.SampledFiles, samplingReport.TotalFiles),
-		Classification: fmt.Sprintf("%s (Confidence: %.2f)", classification.Type, classification.Confidence),
+		Diff:             diffString,
+		Frameworks:       []string{}, // TODO: Load from context.json if available
+		Languages:        detectLanguages(diff),
+		StaticIssues:     staticIssues,
+		SimilarCode:      duplicateWarnings,
+		FileContext:      fmt.Sprintf("%s (Sampled: %d/%d files)", summarizeFiles(diff), samplingReport.SampledFiles, samplingReport.TotalFiles),
+		Classification:   fmt.Sprintf("%s (Confidence: %.2f)", classification.Type, classification.Confidence),
+		AIGeneratedFiles: aiGeneratedFiles,
 	}
 
 	// 5. Generate Prompt
@@ -242,7 +250,7 @@ func (e *ReviewEngine) Review(diff *git.Diff) (*ReviewReport, error) {
 	}
 
 	// 8. Synthesize Report
-	report := e.synthesizer.Synthesize(resp.Content, staticIssues, duplicateWarnings)
+	report := e.synthesizer.Synthesize(resp.Content, staticIssues, duplicateWarnings, localResult.FileAnalysis)
 
 	return report, nil
 }

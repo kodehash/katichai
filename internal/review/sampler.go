@@ -279,16 +279,18 @@ func (s *DiffSampler) calculateRiskScores(files []*git.DiffFile, analysisResults
 				risk.Reasons = append(risk.Reasons, fmt.Sprintf("high-complexity(%d)", highComplexityCount))
 			}
 			
-			// AI-generated patterns
-			aiIssues := 0
-			for _, issue := range analysis.Issues {
-				if issue.Type == "ai_generated" {
-					aiIssues++
+			// AI-generated patterns (enhanced with percentage)
+			if analysis.AIScore != nil && analysis.AIScore.AIPercentage > 0 {
+				if analysis.AIScore.AIPercentage > 70 {
+					risk.Score += 8
+					risk.Reasons = append(risk.Reasons, fmt.Sprintf("ai-generated(%.0f%%)", analysis.AIScore.AIPercentage))
+				} else if analysis.AIScore.AIPercentage > 40 {
+					risk.Score += 4
+					risk.Reasons = append(risk.Reasons, fmt.Sprintf("ai-generated(%.0f%%)", analysis.AIScore.AIPercentage))
+				} else {
+					risk.Score += 2
+					risk.Reasons = append(risk.Reasons, fmt.Sprintf("ai-generated(%.0f%%)", analysis.AIScore.AIPercentage))
 				}
-			}
-			if aiIssues > 0 {
-				risk.Score += 2
-				risk.Reasons = append(risk.Reasons, "ai-generated")
 			}
 		}
 		

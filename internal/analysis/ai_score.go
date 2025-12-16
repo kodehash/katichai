@@ -1,0 +1,68 @@
+package analysis
+
+// AIFileScore represents AI-generated code analysis for a file
+type AIFileScore struct {
+	FilePath          string            `json:"file_path"`
+	TotalLOC          int               `json:"total_loc"`
+	AIGeneratedLOC    int               `json:"ai_generated_loc"`
+	AIPercentage      float64           `json:"ai_percentage"`
+	OverallConfidence float64           `json:"overall_confidence"`
+	FunctionScores    []AIFunctionScore `json:"function_scores"`
+}
+
+// AIFunctionScore represents AI detection for a single function
+type AIFunctionScore struct {
+	FunctionName string   `json:"function_name"`
+	StartLine    int      `json:"start_line"`
+	EndLine      int      `json:"end_line"`
+	LOC          int      `json:"loc"`
+	AIConfidence float64  `json:"ai_confidence"`
+	Indicators   []string `json:"indicators"`
+}
+
+// CalculateAIScore calculates AI-generated percentage for a file
+func CalculateAIScore(fileAnalysis *FileAnalysis, detector *AICodeDetector) *AIFileScore {
+	score := &AIFileScore{
+		FilePath:       fileAnalysis.FilePath,
+		TotalLOC:       fileAnalysis.Metrics.LinesOfCode,
+		FunctionScores: make([]AIFunctionScore, 0),
+	}
+
+	if score.TotalLOC == 0 {
+		return score
+	}
+
+	aiLOC := 0
+	weightedConfidence := 0.0
+
+	for _, fn := range fileAnalysis.Functions {
+		confidence, indicators := detector.CalculateConfidence(fn, fileAnalysis.Language)
+
+		// Threshold: 0.35 confidence = likely AI-generated
+		if confidence >= 0.35 {
+			aiLOC += fn.LOC
+
+			score.FunctionScores = append(score.FunctionScores, AIFunctionScore{
+				FunctionName: fn.Name,
+				StartLine:    fn.StartLine,
+				EndLine:      fn.EndLine,
+				LOC:          fn.LOC,
+				AIConfidence: confidence,
+				Indicators:   indicators,
+			})
+		}
+
+		// Weighted average (all functions contribute)
+		weightedConfidence += confidence * float64(fn.LOC)
+	}
+
+	score.AIGeneratedLOC = aiLOC
+
+	if score.TotalLOC > 0 {
+		score.AIPercentage = float64(aiLOC) / float64(score.TotalLOC) * 100
+		score.OverallConfidence = weightedConfidence / float64(score.TotalLOC)
+	}
+
+	return score
+}
+
