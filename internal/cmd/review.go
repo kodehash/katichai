@@ -160,10 +160,6 @@ func runReviewDiff(diffRange string) error {
 	if err != nil {
 		return fmt.Errorf("failed to find Git repository: %w", err)
 	}
-	
-	if verbose {
-		fmt.Printf("Repository: %s\n", repo.RootPath)
-	}
 
 	// Load config
 	cfg, err := config.Load(GetConfig())
@@ -186,7 +182,7 @@ func runReviewDiff(diffRange string) error {
 		return fmt.Errorf("failed to get diff: %w", err)
 	}
 
-	// Run comprehensive review
+	// Run comprehensive review with AI
 	fmt.Println("🤖 Analyzing code changes with AI...")
 	report, err := engine.Review(diff)
 	if err != nil {

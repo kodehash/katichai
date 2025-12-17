@@ -48,9 +48,6 @@ analysis:
   max_function_length: 50
   complexity_threshold: 10
   similarity_threshold: 0.85
-  min_duplicate_lines: 5      # Minimum 5 lines to flag as duplicate
-  duplicate_threshold: 0.90   # 90% similarity = duplicate
-  refactor_threshold: 0.80    # 80% similarity = refactor opportunity
   sampling:
     enabled: true
     max_files: 20

@@ -51,14 +51,13 @@ Output your review in the following Markdown format:
 
 // ReviewContext contains all information needed to build a review prompt
 type ReviewContext struct {
-	Diff             string
-	Frameworks       []string
-	Languages        []string
-	StaticIssues     []analysis.Issue
-	SimilarCode      []string                  // Descriptions of similar code found
-	FileContext      string                    // Summary of file locations/structure
-	Classification   string                    // Change classification (e.g. LOGIC, BOILERPLATE)
-	AIGeneratedFiles []*analysis.AIFileScore   // Files with AI-generated code
+	Diff         string
+	Frameworks   []string
+	Languages    []string
+	StaticIssues []analysis.Issue
+	SimilarCode  []string // Descriptions of similar code found
+	FileContext  string   // Summary of file locations/structure
+	Classification string // Change classification (e.g. LOGIC, BOILERPLATE)
 }
 
 // PromptBuilder handles the construction of LLM prompts
@@ -109,45 +108,6 @@ func (p *PromptBuilder) BuildReviewPrompt(ctx ReviewContext) string {
 			sb.WriteString(fmt.Sprintf("- %s\n", match))
 		}
 		sb.WriteString("\n")
-	}
-
-	// 3.5. AI-Generated Code Detection (focus review here)
-	if len(ctx.AIGeneratedFiles) > 0 {
-		sb.WriteString("### ⚠️ AI-Generated Code Detected (Pay Extra Attention)\n")
-		sb.WriteString("The following files contain likely AI-generated code. Review carefully for:\n")
-		sb.WriteString("- Logic errors or unhandled edge cases\n")
-		sb.WriteString("- Domain-specific requirements that AI may have missed\n")
-		sb.WriteString("- Unnecessary verbosity or over-engineering\n")
-		sb.WriteString("- Generic error handling that may not fit your patterns\n\n")
-
-		for _, aiFile := range ctx.AIGeneratedFiles {
-			sb.WriteString(fmt.Sprintf("**`%s`** (%.0f%% AI-generated, %.0f%% confidence)\n",
-				aiFile.FilePath,
-				aiFile.AIPercentage,
-				aiFile.OverallConfidence*100))
-
-			if len(aiFile.FunctionScores) > 0 {
-				for _, fn := range aiFile.FunctionScores {
-					// Show top 3 indicators
-					indicatorCount := len(fn.Indicators)
-					if indicatorCount > 3 {
-						indicatorCount = 3
-					}
-					indicators := strings.Join(fn.Indicators[:indicatorCount], ", ")
-
-					sb.WriteString(fmt.Sprintf("  - Function `%s` (%.0f%% confidence): %s",
-						fn.FunctionName,
-						fn.AIConfidence*100,
-						indicators))
-
-					if len(fn.Indicators) > 3 {
-						sb.WriteString(fmt.Sprintf(" +%d more", len(fn.Indicators)-3))
-					}
-					sb.WriteString("\n")
-				}
-			}
-			sb.WriteString("\n")
-		}
 	}
 
 	// 4. The Diff

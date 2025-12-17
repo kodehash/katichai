@@ -33,13 +33,10 @@ type EmbeddingsConfig struct {
 
 // AnalysisConfig contains code analysis thresholds
 type AnalysisConfig struct {
-	MaxFunctionLength     int            `yaml:"max_function_length"`
-	ComplexityThreshold   int            `yaml:"complexity_threshold"`
-	SimilarityThreshold   float64        `yaml:"similarity_threshold"`
-	MinDuplicateLines     int            `yaml:"min_duplicate_lines"`     // Minimum lines for duplicate detection (default: 5)
-	DuplicateThreshold    float64        `yaml:"duplicate_threshold"`     // Threshold for exact duplicates (default: 0.90)
-	RefactorThreshold     float64        `yaml:"refactor_threshold"`      // Threshold for refactoring opportunities (default: 0.80)
-	Sampling              SamplingConfig `yaml:"sampling,omitempty"`
+	MaxFunctionLength   int            `yaml:"max_function_length"`
+	ComplexityThreshold int            `yaml:"complexity_threshold"`
+	SimilarityThreshold float64        `yaml:"similarity_threshold"`
+	Sampling            SamplingConfig `yaml:"sampling,omitempty"`
 }
 
 // SamplingConfig contains diff sampling settings
@@ -68,9 +65,6 @@ func DefaultConfig() *Config {
 			MaxFunctionLength:   50,
 			ComplexityThreshold: 10,
 			SimilarityThreshold: 0.85,
-			MinDuplicateLines:   5,     // Minimum 5 lines to flag duplicate
-			DuplicateThreshold:  0.90,  // 90% similarity for duplicates
-			RefactorThreshold:   0.80,  // 80% similarity for refactor opportunities
 			Sampling: SamplingConfig{
 				Enabled:        true,
 				MaxFiles:       20,

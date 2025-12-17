@@ -61,7 +61,6 @@ func (a *Analyzer) AnalyzeRepository() (*AnalysisResult, error) {
 		// Skip directories and non-source files
 		if info.IsDir() {
 			name := info.Name()
-			// Skip all hidden directories (starting with .)
 			if strings.HasPrefix(name, ".") ||
 				name == "node_modules" ||
 				name == "vendor" ||
@@ -73,13 +72,8 @@ func (a *Analyzer) AnalyzeRepository() (*AnalysisResult, error) {
 			return nil
 		}
 
-		// Analyze source files (skip hidden files)
+		// Analyze source files
 		if a.isSourceFile(path) {
-			// Skip hidden files (starting with .)
-			if strings.HasPrefix(filepath.Base(path), ".") {
-				return nil
-			}
-			
 			analysis, err := a.analyzeFile(path)
 			if err != nil {
 				// Log error but continue
@@ -173,9 +167,6 @@ func (a *Analyzer) analyzeFile(filePath string) (*FileAnalysis, error) {
 			Suggestion: "Review code for potential AI hallucinations or over-engineering",
 		})
 	}
-
-	// Calculate AI score
-	fileAnalysis.AIScore = CalculateAIScore(fileAnalysis, a.aiDetector)
 
 	return fileAnalysis, nil
 }
