@@ -134,3 +134,71 @@ func (d *AICodeDetector) detectRepeatedBlocks(fn FunctionInfo) bool {
 
 	return false
 }
+
+// CalculateConfidence calculates AI-generation confidence for a function
+func (d *AICodeDetector) CalculateConfidence(fn FunctionInfo, language string) (float64, []string) {
+	indicators := []string{}
+	baseConfidence := 0.0
+	
+	// Use language-specific pattern detection
+	switch language {
+	case "Java":
+		detected, langIndicators := detectJavaPatterns(fn)
+		if detected {
+			baseConfidence += 0.4
+			indicators = append(indicators, langIndicators...)
+		}
+	case "Python":
+		detected, langIndicators := detectPythonPatterns(fn)
+		if detected {
+			baseConfidence += 0.4
+			indicators = append(indicators, langIndicators...)
+		}
+	case "Go":
+		detected, langIndicators := detectGoPatterns(fn)
+		if detected {
+			baseConfidence += 0.4
+			indicators = append(indicators, langIndicators...)
+		}
+	case "JavaScript", "TypeScript":
+		detected, langIndicators := detectJSPatterns(fn)
+		if detected {
+			baseConfidence += 0.4
+			indicators = append(indicators, langIndicators...)
+		}
+	case "C#":
+		detected, langIndicators := detectCSharpPatterns(fn)
+		if detected {
+			baseConfidence += 0.4
+			indicators = append(indicators, langIndicators...)
+		}
+	}
+	
+	// Add generic pattern checks
+	if d.isGenericName(fn.Name) {
+		indicators = append(indicators, "Generic function name")
+		baseConfidence += 0.1
+	}
+	
+	if fn.LOC > 100 {
+		indicators = append(indicators, "Excessively long function")
+		baseConfidence += 0.2
+	}
+	
+	if fn.Complexity > 20 {
+		indicators = append(indicators, "Very high complexity")
+		baseConfidence += 0.2
+	}
+	
+	if d.detectRepeatedBlocks(fn) {
+		indicators = append(indicators, "Contains repeated code blocks")
+		baseConfidence += 0.3
+	}
+	
+	// Cap confidence at 1.0
+	if baseConfidence > 1.0 {
+		baseConfidence = 1.0
+	}
+	
+	return baseConfidence, indicators
+}

@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/katichai/katich/internal/analysis"
@@ -134,8 +135,59 @@ func (e *ReviewEngine) Review(diff *git.Diff) (*ReviewReport, error) {
 		}
 	}
 
-	// 3. Build Review Context for LLM
-	diffString := formatDiff(diff)
+	// 3. Calculate Token Budget and Sample Diff
+	// Estimate context tokens first
+	contextTokens := llm.EstimateTokens(llm.SystemPrompt)
+	
+	// Build preliminary context to estimate its size
+	prelimCtx := llm.ReviewContext{
+		Frameworks:     []string{}, // TODO: Load from context.json if available
+		Languages:      detectLanguages(diff),
+		StaticIssues:   staticIssues[:min(len(staticIssues), 10)], // Limit static issues for estimate
+		SimilarCode:    duplicateWarnings[:min(len(duplicateWarnings), 5)],
+		FileContext:    summarizeFiles(diff),
+		Classification: fmt.Sprintf("%s (Confidence: %.2f)", classification.Type, classification.Confidence),
+	}
+	prelimPrompt := e.pmtBuilder.BuildReviewPrompt(prelimCtx)
+	contextTokens += llm.EstimateTokens(prelimPrompt) - llm.EstimateTokens(formatDiff(diff)) // Subtract placeholder diff
+	
+	// Calculate available budget for diff
+	diffBudget := TOTAL_INPUT_BUDGET - contextTokens - BUFFER_TOKENS
+	if diffBudget < 1000 {
+		diffBudget = 1000 // Minimum
+	}
+	if diffBudget > 16000 {
+		diffBudget = 16000 // Maximum
+	}
+	
+	// Sample the diff using intelligent sampling
+	sampler := NewDiffSampler(diffBudget)
+	sampledDiff, samplingReport := sampler.SampleDiff(diff, localResult.FileAnalysis)
+	
+	// Display sampling report to user
+	fmt.Println("\n📊 Sampling Report:")
+	fmt.Printf("  • Total files changed: %d\n", samplingReport.TotalFiles)
+	fmt.Printf("  • Filtered: %d (", samplingReport.FilteredFiles)
+	reasons := []string{}
+	for reason, count := range samplingReport.FilteredReasons {
+		reasons = append(reasons, fmt.Sprintf("%s: %d", reason, count))
+	}
+	fmt.Printf("%s)\n", strings.Join(reasons, ", "))
+	fmt.Printf("  • Reviewing: %d files\n", samplingReport.SampledFiles)
+	
+	if len(samplingReport.TopRiskFiles) > 0 {
+		fmt.Println("\n🔴 High Priority Files:")
+		for i, risk := range samplingReport.TopRiskFiles {
+			if i >= 5 {
+				break
+			}
+			fmt.Printf("  • %s (Risk: %d) - %s\n", risk.File.Path, risk.Score, strings.Join(risk.Reasons, ", "))
+		}
+	}
+	fmt.Println()
+	
+	// 4. Build Review Context for LLM with sampled diff
+	diffString := sampledDiff.Format()
 	
 	reviewCtx := llm.ReviewContext{
 		Diff:           diffString,
@@ -143,11 +195,11 @@ func (e *ReviewEngine) Review(diff *git.Diff) (*ReviewReport, error) {
 		Languages:      detectLanguages(diff),
 		StaticIssues:   staticIssues,
 		SimilarCode:    duplicateWarnings,
-		FileContext:    summarizeFiles(diff),
+		FileContext:    fmt.Sprintf("%s (Sampled: %d/%d files)", summarizeFiles(diff), samplingReport.SampledFiles, samplingReport.TotalFiles),
 		Classification: fmt.Sprintf("%s (Confidence: %.2f)", classification.Type, classification.Confidence),
 	}
 
-	// 4. Generate Prompt
+	// 5. Generate Prompt
 	prompt := e.pmtBuilder.BuildReviewPrompt(reviewCtx)
 	
 	// 5. Query LLM
@@ -165,19 +217,16 @@ func (e *ReviewEngine) Review(diff *git.Diff) (*ReviewReport, error) {
 		return nil, fmt.Errorf("LLM review failed: %w", err)
 	}
 
-	// 6. Synthesize Report
-	report := e.synthesizer.Synthesize(resp.Content, staticIssues, duplicateWarnings)
+	// 6. Filter LLM output to only issues related to actual code changes
+	filteredLLMOutput := e.filterLLMOutputToChanges(resp.Content, diff, localResult.FileAnalysis)
+
+	// 7. Synthesize Report
+	report := e.synthesizer.Synthesize(filteredLLMOutput, staticIssues, duplicateWarnings, localResult.FileAnalysis)
 
 	return report, nil
 }
 
 // Helper function for min
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
 
 // formatDiff converts structured diff back to string representation
 func formatDiff(diff *git.Diff) string {
@@ -222,3 +271,145 @@ func summarizeFiles(diff *git.Diff) string {
 	}
 	return strings.Join(files, ", ")
 }
+
+// filterLLMOutputToChanges filters LLM output to only include issues related to actual code changes
+func (e *ReviewEngine) filterLLMOutputToChanges(llmOutput string, diff *git.Diff, fileAnalysis map[string]*analysis.FileAnalysis) string {
+	// Build a list of functions with actual code changes (not just comments/formatting)
+	changedFunctions := e.findActuallyChangedFunctions(diff, fileAnalysis)
+	
+	if len(changedFunctions) == 0 {
+		// If no functions had real code changes, likely only comments/formatting
+		// Remove all critical issues from LLM output
+		return e.removeCriticalIssues(llmOutput)
+	}
+	
+	// Parse the critical issues section
+	issuesSectionRegex := regexp.MustCompile(`(?s)(## Critical Issues.*?\n)(.*?)(##|$)`)
+	matches := issuesSectionRegex.FindStringSubmatch(llmOutput)
+	
+	if len(matches) < 3 {
+		// No critical issues section found
+		return llmOutput
+	}
+	
+	header := matches[1]
+	issuesText := matches[2]
+	rest := ""
+	if len(matches) > 3 {
+		rest = matches[3]
+	}
+	
+	// Filter issues line by line
+	filteredIssues := []string{}
+	for _, line := range strings.Split(issuesText, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		
+		if strings.HasPrefix(line, "-") {
+			// Check if this issue mentions any of the changed functions
+			includeIssue := false
+			lineLower := strings.ToLower(line)
+			
+			for funcName := range changedFunctions {
+				funcLower := strings.ToLower(funcName)
+				// Check if function name is mentioned in the issue
+				if strings.Contains(lineLower, funcLower) || strings.Contains(lineLower, "`"+funcLower+"`") {
+					includeIssue = true
+					break
+				}
+			}
+			
+			if includeIssue {
+				filteredIssues = append(filteredIssues, line)
+			}
+		} else {
+			// Keep non-issue lines (like subsection headers)
+			filteredIssues = append(filteredIssues, line)
+		}
+	}
+	
+	// Reconstruct the output
+	beforeIssues := llmOutput[:strings.Index(llmOutput, header)]
+	afterIssues := ""
+	if rest != "" && strings.HasPrefix(rest, "##") {
+		afterIssues = llmOutput[strings.Index(llmOutput, rest):]
+	}
+	
+	var result strings.Builder
+	result.WriteString(beforeIssues)
+	result.WriteString(header)
+	
+	if len(filteredIssues) == 0 {
+		result.WriteString("- None. The changes do not introduce new issues.\n\n")
+	} else {
+		result.WriteString(strings.Join(filteredIssues, "\n"))
+		result.WriteString("\n\n")
+	}
+	
+	result.WriteString(afterIssues)
+	
+	return result.String()
+}
+
+// findActuallyChangedFunctions identifies functions with real code changes (not just comments)
+func (e *ReviewEngine) findActuallyChangedFunctions(diff *git.Diff, fileAnalysis map[string]*analysis.FileAnalysis) map[string]bool {
+	changedFunctions := make(map[string]bool)
+	
+	for _, file := range diff.Files {
+		analysis, exists := fileAnalysis[file.Path]
+		if !exists {
+			continue
+		}
+		
+		// Parse the patch to find what changed
+		lines := strings.Split(file.Patch, "\n")
+		lineNum := 0
+		
+		for _, line := range lines {
+			// Parse @@ header
+			if strings.HasPrefix(line, "@@") {
+				re := regexp.MustCompile(`\+(\d+)`)
+				if match := re.FindStringSubmatch(line); len(match) > 1 {
+					fmt.Sscanf(match[1], "%d", &lineNum)
+				}
+				continue
+			}
+			
+			// Check for actual code changes (not just comments)
+			if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
+				trimmed := strings.TrimSpace(strings.TrimPrefix(line, "+"))
+				
+				// Skip pure comment lines
+				if trimmed == "" || strings.HasPrefix(trimmed, "//") || 
+				   strings.HasPrefix(trimmed, "/*") || strings.HasPrefix(trimmed, "*") || 
+				   strings.HasPrefix(trimmed, "#") {
+					lineNum++
+					continue
+				}
+				
+				// This is an actual code change - find which function it's in
+				for _, fn := range analysis.Functions {
+					if lineNum >= fn.StartLine && lineNum <= fn.EndLine {
+						changedFunctions[fn.Name] = true
+						break
+					}
+				}
+				
+				lineNum++
+			} else if !strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "\\") {
+				lineNum++
+			}
+		}
+	}
+	
+	return changedFunctions
+}
+
+// removeCriticalIssues removes the critical issues section when no real code changes exist
+func (e *ReviewEngine) removeCriticalIssues(llmOutput string) string {
+	issuesSectionRegex := regexp.MustCompile(`(?s)(## Critical Issues.*?\n)(.*?)(##|$)`)
+	return issuesSectionRegex.ReplaceAllString(llmOutput, "$1- None. The changes do not introduce new issues.\n\n$3")
+}
+

@@ -60,6 +60,7 @@ type FileAnalysis struct {
 	Classes    []ClassInfo    `json:"classes"`
 	Imports    []ImportInfo   `json:"imports"`
 	Issues     []Issue        `json:"issues,omitempty"`
+	AIScore    *AIFileScore   `json:"ai_score,omitempty"`
 }
 
 // Issue represents a code quality issue

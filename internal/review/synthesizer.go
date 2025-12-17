@@ -9,17 +9,19 @@ import (
 
 // ReviewReport represents the final synthesized review
 type ReviewReport struct {
-	Summary     string        `json:"summary"`
-	Score       int           `json:"score"`
-	Status      string        `json:"status"` // PASS or FAIL
-	Issues      []ReviewIssue `json:"issues"`
-	Suggestions []string      `json:"suggestions"`
+	Summary      string                           `json:"summary"`
+	Score        int                              `json:"score"`
+	Status       string                           `json:"status"` // PASS or FAIL
+	Issues       []ReviewIssue                    `json:"issues"`
+	Suggestions  []string                         `json:"suggestions"`
+	FileAnalysis map[string]*analysis.FileAnalysis `json:"file_analysis,omitempty"`
 }
 
 // ReviewIssue represents an issue found during review
 type ReviewIssue struct {
-	Category    string `json:"category"` // SECURITY, ARCHITECTURE, PERFORMANCE, CODE_QUALITY
-	Severity    string `json:"severity"` // CRITICAL, WARNING, INFO
+	Category    string `json:"category"`    // SECURITY, ARCHITECTURE, PERFORMANCE, CODE_QUALITY, STATIC_ANALYSIS
+	Subcategory string `json:"subcategory"` // For STATIC_ANALYSIS: complexity, function_length, naming, etc.
+	Severity    string `json:"severity"`    // CRITICAL, WARNING, INFO
 	Description string `json:"description"`
 	Location    string `json:"location,omitempty"`
 }
@@ -33,10 +35,11 @@ func NewSynthesizer() *Synthesizer {
 }
 
 // Synthesize combines LLM output with static analysis
-func (s *Synthesizer) Synthesize(llmOutput string, staticIssues []analysis.Issue, duplicates []string) *ReviewReport {
+func (s *Synthesizer) Synthesize(llmOutput string, staticIssues []analysis.Issue, duplicates []string, fileAnalysis map[string]*analysis.FileAnalysis) *ReviewReport {
 	report := &ReviewReport{
-		Status: "PASS",
-		Score:  100,
+		Status:       "PASS",
+		Score:        100,
+		FileAnalysis: fileAnalysis,
 	}
 
 	// 1. Parse LLM Output
@@ -48,17 +51,14 @@ func (s *Synthesizer) Synthesize(llmOutput string, staticIssues []analysis.Issue
 		// We might want to deduplicate if LLM found the same thing, but simple append is safer now
 		rIssue := ReviewIssue{
 			Category:    "STATIC_ANALYSIS",
+			Subcategory: string(issue.Type), // complexity, function_length, naming, etc.
 			Severity:    strings.ToUpper(string(issue.Severity)),
 			Description: issue.Message,
 			Location:    issue.File,
 		}
 		report.Issues = append(report.Issues, rIssue)
 		
-		// Penalty for static issues (Low priority)
-		if issue.Severity == "error" || issue.Severity == "critical" {
-			report.Score -= 1
-		} 
-		// Warnings have 0 penalty now
+		// Static analysis issues are informational only - no score penalty
 
 	}
 

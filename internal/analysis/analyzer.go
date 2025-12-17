@@ -168,6 +168,9 @@ func (a *Analyzer) analyzeFile(filePath string) (*FileAnalysis, error) {
 		})
 	}
 
+	// Calculate AI score
+	fileAnalysis.AIScore = CalculateAIScore(fileAnalysis, a.aiDetector)
+
 	return fileAnalysis, nil
 }
 
