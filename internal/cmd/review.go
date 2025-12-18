@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/katichai/katich/internal/config"
 	"github.com/katichai/katich/internal/git"
@@ -74,7 +75,43 @@ var reviewFileCmd = &cobra.Command{
 	},
 }
 
+// checkKatichInitialized checks if .katich directory exists
+// This check happens before Git repository check
+func checkKatichInitialized() error {
+	// Get current working directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+	
+	// Walk up the directory tree to find .katich directory
+	current := cwd
+	for {
+		katichDir := filepath.Join(current, ".katich")
+		info, err := os.Stat(katichDir)
+		if err == nil && info.IsDir() {
+			// Found .katich directory
+			return nil
+		}
+		
+		// Check if we've reached the filesystem root
+		parent := filepath.Dir(current)
+		if parent == current {
+			// Reached root, .katich not found
+			break
+		}
+		current = parent
+	}
+	
+	return fmt.Errorf("katich not Initialized, run katich init to get started")
+}
+
 func runReviewLatest() error {
+	// Check if katich is initialized
+	if err := checkKatichInitialized(); err != nil {
+		return err
+	}
+	
 	fmt.Println("🔍 Reviewing latest commit...")
 	
 	// Find Git repository
@@ -153,6 +190,11 @@ func writeToFile(path, content string) error {
 }
 
 func runReviewDiff(diffRange string) error {
+	// Check if katich is initialized
+	if err := checkKatichInitialized(); err != nil {
+		return err
+	}
+	
 	fmt.Printf("🔍 Reviewing diff range: %s\n", diffRange)
 	
 	// Find Git repository
@@ -223,6 +265,11 @@ func runReviewDiff(diffRange string) error {
 }
 
 func runReviewFile(filePath string) error {
+	// Check if katich is initialized
+	if err := checkKatichInitialized(); err != nil {
+		return err
+	}
+	
 	// TODO: Implement file review using Reviewer
 	fmt.Println("⚠️  Review file not fully implemented yet")
 	return nil

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/katichai/katich/internal/git"
 	"github.com/spf13/cobra"
 )
 
@@ -18,6 +19,12 @@ var initCmd = &cobra.Command{
 }
 
 func runInit() {
+	// Check if we're in a Git repository
+	if _, err := git.FindRepository(); err != nil {
+		fmt.Println("Error: katich works with git repos, kindly initiate git and add a commit for katich to compare and review")
+		return
+	}
+
 	configDir := ".katich"
 	configFile := filepath.Join(configDir, "config.yaml")
 
@@ -47,7 +54,10 @@ embeddings:
 analysis:
   max_function_length: 50
   complexity_threshold: 10
-  similarity_threshold: 0.85
+  similarity_threshold: 0.70
+  min_function_lines: 5
+  duplicate_threshold: 0.85
+  ignore_trivial_patterns: true
   sampling:
     enabled: true
     max_files: 20
