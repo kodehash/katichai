@@ -15,6 +15,28 @@ type RegexParser struct {
 	language string
 }
 
+// Language keywords that should NOT be treated as functions
+var languageKeywords = map[string][]string{
+	string(context.LanguageJava): {
+		"if", "else", "while", "for", "switch", "catch", "synchronized", "try", "finally",
+	},
+	string(context.LanguageCSharp): {
+		"if", "else", "while", "for", "foreach", "switch", "catch", "lock", "using", "try", "finally",
+	},
+	string(context.LanguageJavaScript): {
+		"if", "else", "while", "for", "switch", "catch", "try", "finally", "with",
+	},
+	string(context.LanguageTypeScript): {
+		"if", "else", "while", "for", "switch", "catch", "try", "finally", "with",
+	},
+	string(context.LanguagePython): {
+		"if", "elif", "else", "while", "for", "try", "except", "finally", "with", "match", "case",
+	},
+	string(context.LanguageGo): {
+		"if", "else", "for", "switch", "case", "select", "defer", "go", "range",
+	},
+}
+
 // NewRegexParser creates a new parser for a specific language
 func NewRegexParser(language string) *RegexParser {
 	return &RegexParser{language: language}
@@ -112,7 +134,7 @@ func (p *RegexParser) ParseFile(filePath string) (*FileAnalysis, error) {
 				}
 			}
 			
-			if funcName != "" {
+			if funcName != "" && !p.isKeyword(funcName) {
 				fn := FunctionInfo{
 					Name:      funcName,
 					StartLine: i + 1,
@@ -135,7 +157,6 @@ func (p *RegexParser) ParseFile(filePath string) (*FileAnalysis, error) {
 				
 				// Basic Complexity Check (count branching keywords)
 				fn.Complexity = p.calculateComplexity(fn.Body)
-				
 				
 				analysis.Functions = append(analysis.Functions, fn)
 			}
@@ -176,6 +197,22 @@ func (p *RegexParser) ParseFile(filePath string) (*FileAnalysis, error) {
 	}
 
 	return analysis, nil
+}
+
+// isKeyword checks if a name is a language keyword
+func (p *RegexParser) isKeyword(name string) bool {
+	keywords, ok := languageKeywords[p.language]
+	if !ok {
+		return false
+	}
+	
+	nameLower := strings.ToLower(name)
+	for _, keyword := range keywords {
+		if nameLower == keyword {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *RegexParser) extractBraceBody(lines []string, startLine int) (int, string) {

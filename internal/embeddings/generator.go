@@ -20,6 +20,8 @@ type CodeEmbedding struct {
 	Code       string    `json:"code"`        // The actual code
 	Embedding  []float32 `json:"embedding"`   // The embedding vector
 	Language   string    `json:"language"`    // Programming language
+	LOC        int       `json:"loc"`         // Lines of code
+	Complexity int       `json:"complexity"`  // Cyclomatic complexity
 }
 
 // EmbeddingIndex stores all embeddings
@@ -45,7 +47,6 @@ func NewGenerator(provider EmbeddingProvider, rootPath string) *Generator {
 	}
 }
 
-// GenerateForAnalysis generates embeddings for analyzed code
 // GenerateForAnalysis generates embeddings for analyzed code
 func (g *Generator) GenerateForAnalysis(analysisResult *analysis.AnalysisResult, incremental bool) (*EmbeddingIndex, error) {
 	// Try to load existing index for incremental update
@@ -74,9 +75,18 @@ func (g *Generator) GenerateForAnalysis(analysisResult *analysis.AnalysisResult,
 		totalFunctions += len(fileAnalysis.Functions)
 	}
 
-	processed := 0
 	reused := 0
-	generated := 0
+	
+	// Collect all code snippets that need new embeddings
+	type snippetMetadata struct {
+		FilePath  string
+		Function  analysis.FunctionInfo
+		Language  string
+		Snippet   string
+	}
+	
+	var snippetsToGenerate []string
+	var snippetMeta []snippetMetadata
 
 	for filePath, fileAnalysis := range analysisResult.Files {
 		// Update hash map
@@ -105,73 +115,88 @@ func (g *Generator) GenerateForAnalysis(analysisResult *analysis.AnalysisResult,
 			// If we successfully reused embeddings, skip generation
 			if foundEmbeddings {
 				reused += len(fileAnalysis.Functions)
-				processed += len(fileAnalysis.Functions)
 				continue
 			}
 		}
 
-		// Generate embeddings for each function in this file
+		// Collect snippets for batch generation
 		for _, fn := range fileAnalysis.Functions {
 			// Create code snippet for embedding
 			codeSnippet := g.createCodeSnippet(fn, fileAnalysis.Language)
 			
-			// Generate embedding
-			embedding, err := g.provider.GenerateEmbedding(codeSnippet)
-			if err != nil {
-				// Log error but continue
-				fmt.Printf("Warning: Failed to generate embedding for %s:%s: %v\n", filePath, fn.Name, err)
-				continue
-			}
-
-			// Create code embedding
-			codeEmb := CodeEmbedding{
-				ID:        g.generateID(filePath, fn.Name, fn.StartLine),
-				FilePath:  filePath,
-				FuncName:  fn.Name,
-				StartLine: fn.StartLine,
-				EndLine:   fn.EndLine,
-				Code:      codeSnippet,
-				Embedding: embedding,
-				Language:  fileAnalysis.Language,
-			}
-
-			index.Embeddings = append(index.Embeddings, codeEmb)
-			processed++
-			generated++
-
-			// Progress indicator
-			if processed%10 == 0 {
-				fmt.Printf("  Processed %d/%d (Generated: %d, Reused: %d)...\n", processed, totalFunctions, generated, reused)
-			}
+			snippetsToGenerate = append(snippetsToGenerate, codeSnippet)
+			snippetMeta = append(snippetMeta, snippetMetadata{
+				FilePath: filePath,
+				Function: fn,
+				Language: fileAnalysis.Language,
+				Snippet:  codeSnippet,
+			})
 		}
 	}
 
-	fmt.Printf("  Finished: Generated %d, Reused %d embeddings\n", generated, reused)
+	generated := len(snippetsToGenerate)
+	
+	if generated > 0 {
+		fmt.Printf("  Generating %d embeddings in batches (Reusing: %d)...\n", generated, reused)
+		
+		// Generate all embeddings in batches
+		embeddings, err := g.provider.GenerateBatchEmbeddings(snippetsToGenerate)
+		if err != nil {
+			return nil, fmt.Errorf("batch embedding generation failed: %w", err)
+		}
+		
+		// Verify we got all embeddings
+		if len(embeddings) != len(snippetsToGenerate) {
+			return nil, fmt.Errorf("embedding count mismatch: expected %d, got %d", len(snippetsToGenerate), len(embeddings))
+		}
+		
+		// Map embeddings back to functions
+		for i, emb := range embeddings {
+			meta := snippetMeta[i]
+			
+			codeEmb := CodeEmbedding{
+				ID:         g.generateID(meta.FilePath, meta.Function.Name, meta.Function.StartLine),
+				FilePath:   meta.FilePath,
+				FuncName:   meta.Function.Name,
+				StartLine:  meta.Function.StartLine,
+				EndLine:    meta.Function.EndLine,
+				Code:       meta.Snippet,
+				Embedding:  emb,
+				Language:   meta.Language,
+				LOC:        meta.Function.LOC,
+				Complexity: meta.Function.Complexity,
+			}
+			
+			index.Embeddings = append(index.Embeddings, codeEmb)
+		}
+		
+		fmt.Printf("  ✅ Generated %d embeddings successfully\n", generated)
+	}
+	
+	fmt.Printf("  Finished: Generated %d, Reused %d embeddings (Total: %d)\n", generated, reused, generated+reused)
 	return index, nil
 }
 
 // createCodeSnippet creates a code snippet for embedding
 func (g *Generator) createCodeSnippet(fn analysis.FunctionInfo, language string) string {
-	// For now, create a simple representation
-	// In the future, we could read the actual code from the file
+	// Use actual function body for better semantic matching
 	snippet := fmt.Sprintf("// Language: %s\n", language)
 	snippet += fmt.Sprintf("// Function: %s\n", fn.Name)
+	snippet += fmt.Sprintf("// Complexity: %d, LOC: %d\n", fn.Complexity, fn.LOC)
 	
-	if len(fn.Parameters) > 0 {
-		snippet += fmt.Sprintf("// Parameters: %v\n", fn.Parameters)
+	// Include actual body for semantic similarity
+	if fn.Body != "" {
+		snippet += fn.Body
+	} else {
+		// Fallback to metadata if body not available
+		if len(fn.Parameters) > 0 {
+			snippet += fmt.Sprintf("// Parameters: %v\n", fn.Parameters)
+		}
+		if fn.ReturnType != "" {
+			snippet += fmt.Sprintf("// Returns: %s\n", fn.ReturnType)
+		}
 	}
 	
-	if fn.ReturnType != "" {
-		snippet += fmt.Sprintf("// Returns: %s\n", fn.ReturnType)
-	}
-	
-	if fn.Comments != "" {
-		snippet += fmt.Sprintf("// Comments: %s\n", fn.Comments)
-	}
-	
-	snippet += fmt.Sprintf("// Complexity: %d\n", fn.Complexity)
-	snippet += fmt.Sprintf("// Lines: %d\n", fn.LOC)
-
 	return snippet
 }
 

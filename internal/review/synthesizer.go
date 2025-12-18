@@ -9,12 +9,20 @@ import (
 
 // ReviewReport represents the final synthesized review
 type ReviewReport struct {
-	Summary      string                           `json:"summary"`
-	Score        int                              `json:"score"`
-	Status       string                           `json:"status"` // PASS or FAIL
-	Issues       []ReviewIssue                    `json:"issues"`
-	Suggestions  []string                         `json:"suggestions"`
-	FileAnalysis map[string]*analysis.FileAnalysis `json:"file_analysis,omitempty"`
+	Summary         string                            `json:"summary"`
+	Score           int                               `json:"score"`
+	Status          string                            `json:"status"` // PASS or FAIL
+	Issues          []ReviewIssue                     `json:"issues"`
+	Suggestions     []string                          `json:"suggestions"`
+	FileAnalysis    map[string]*analysis.FileAnalysis `json:"file_analysis,omitempty"`
+	TokensUsed      TokenUsage                        `json:"tokens_used"`
+}
+
+// TokenUsage represents token consumption for the review
+type TokenUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
 }
 
 // ReviewIssue represents an issue found during review
@@ -35,11 +43,12 @@ func NewSynthesizer() *Synthesizer {
 }
 
 // Synthesize combines LLM output with static analysis
-func (s *Synthesizer) Synthesize(llmOutput string, staticIssues []analysis.Issue, duplicates []string, fileAnalysis map[string]*analysis.FileAnalysis) *ReviewReport {
+func (s *Synthesizer) Synthesize(llmOutput string, staticIssues []analysis.Issue, duplicates []string, fileAnalysis map[string]*analysis.FileAnalysis, tokensUsed TokenUsage) *ReviewReport {
 	report := &ReviewReport{
 		Status:       "PASS",
 		Score:        100,
 		FileAnalysis: fileAnalysis,
+		TokensUsed:   tokensUsed,
 	}
 
 	// 1. Parse LLM Output

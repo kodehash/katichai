@@ -220,8 +220,13 @@ func (e *ReviewEngine) Review(diff *git.Diff) (*ReviewReport, error) {
 	// 6. Filter LLM output to only issues related to actual code changes
 	filteredLLMOutput := e.filterLLMOutputToChanges(resp.Content, diff, localResult.FileAnalysis)
 
-	// 7. Synthesize Report
-	report := e.synthesizer.Synthesize(filteredLLMOutput, staticIssues, duplicateWarnings, localResult.FileAnalysis)
+	// 7. Synthesize Report with token usage
+	tokenUsage := TokenUsage{
+		InputTokens:  resp.Usage.PromptTokens,
+		OutputTokens: resp.Usage.CompletionTokens,
+		TotalTokens:  resp.Usage.TotalTokens,
+	}
+	report := e.synthesizer.Synthesize(filteredLLMOutput, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage)
 
 	return report, nil
 }

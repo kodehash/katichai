@@ -23,6 +23,14 @@ func (f *Formatter) FormatText(report *ReviewReport) string {
 	sb.WriteString(fmt.Sprintf(" 🤖 AI CODE REVIEW REPORT   (Score: %d/100)   [%s]\n", report.Score, report.Status))
 	sb.WriteString("════════════════════════════════════════════════════════════\n\n")
 
+	// Token Usage
+	if report.TokensUsed.TotalTokens > 0 {
+		sb.WriteString(fmt.Sprintf("📊 Tokens: %s%d input%s + %s%d output%s = %s%d total%s\n\n",
+			"\033[36m", report.TokensUsed.InputTokens, "\033[0m",
+			"\033[36m", report.TokensUsed.OutputTokens, "\033[0m",
+			"\033[1;36m", report.TokensUsed.TotalTokens, "\033[0m"))
+	}
+
 	// Summary
 	if report.Summary != "" {
 		sb.WriteString("📌 SUMMARY\n")
@@ -133,6 +141,14 @@ func (f *Formatter) FormatMarkdown(report *ReviewReport) string {
 
 	sb.WriteString(fmt.Sprintf("# Code Review Report\n\n"))
 	sb.WriteString(fmt.Sprintf("**Status**: %s | **Score**: %d/100\n\n", report.Status, report.Score))
+	
+	// Token Usage
+	if report.TokensUsed.TotalTokens > 0 {
+		sb.WriteString(fmt.Sprintf("**Tokens Used**: %d input + %d output = **%d total**\n\n",
+			report.TokensUsed.InputTokens,
+			report.TokensUsed.OutputTokens,
+			report.TokensUsed.TotalTokens))
+	}
 	
 	sb.WriteString("## Summary\n")
 	sb.WriteString(report.Summary + "\n\n")

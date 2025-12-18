@@ -12,6 +12,7 @@ import (
 // EmbeddingProvider generates embeddings for code
 type EmbeddingProvider interface {
 	GenerateEmbedding(text string) ([]float32, error)
+	GenerateBatchEmbeddings(texts []string) ([][]float32, error)
 	GetDimension() int
 	GetName() string
 }
@@ -101,6 +102,25 @@ func (p *OllamaProvider) IsAvailable() bool {
 	return resp.StatusCode == http.StatusOK
 }
 
+// GenerateBatchEmbeddings generates embeddings for multiple texts
+// Note: Ollama doesn't have native batch API, so we process sequentially
+func (p *OllamaProvider) GenerateBatchEmbeddings(texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return [][]float32{}, nil
+	}
+	
+	embeddings := make([][]float32, len(texts))
+	for i, text := range texts {
+		emb, err := p.GenerateEmbedding(text)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate embedding for text %d: %w", i, err)
+		}
+		embeddings[i] = emb
+	}
+	
+	return embeddings, nil
+}
+
 // OpenAIProvider uses OpenAI API for embeddings
 type OpenAIProvider struct {
 	apiKey string
@@ -181,6 +201,86 @@ func (p *OpenAIProvider) GetName() string {
 	return "OpenAI"
 }
 
+// GenerateBatchEmbeddings generates embeddings for multiple texts in batches
+func (p *OpenAIProvider) GenerateBatchEmbeddings(texts []string) ([][]float32, error) {
+	const maxBatchSize = 2048 // OpenAI allows up to 2048 inputs per request
+	
+	if len(texts) == 0 {
+		return [][]float32{}, nil
+	}
+	
+	var allEmbeddings [][]float32
+	
+	// Process in chunks of 2048
+	for i := 0; i < len(texts); i += maxBatchSize {
+		end := i + maxBatchSize
+		if end > len(texts) {
+			end = len(texts)
+		}
+		batch := texts[i:end]
+		
+		// Create request body
+		requestBody := map[string]interface{}{
+			"input": batch,
+			"model": p.model,
+		}
+		
+		jsonData, err := json.Marshal(requestBody)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal request: %w", err)
+		}
+		
+		req, err := http.NewRequest("POST", "https://api.openai.com/v1/embeddings", bytes.NewBuffer(jsonData))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+		
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", p.apiKey))
+		
+		resp, err := p.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("openai batch request failed: %w", err)
+		}
+		defer resp.Body.Close()
+		
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("openai returned status %d: %s", resp.StatusCode, string(body))
+		}
+		
+		var response struct {
+			Data []struct {
+				Index     int       `json:"index"`
+				Embedding []float32 `json:"embedding"`
+			} `json:"data"`
+		}
+		
+		if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+		
+		// Extract embeddings in order
+		batchEmbeddings := make([][]float32, len(batch))
+		for _, item := range response.Data {
+			if item.Index < len(batchEmbeddings) {
+				batchEmbeddings[item.Index] = item.Embedding
+			}
+		}
+		
+		// Verify all embeddings were received
+		for idx, emb := range batchEmbeddings {
+			if len(emb) == 0 {
+				return nil, fmt.Errorf("missing embedding for index %d in batch starting at %d", idx, i)
+			}
+		}
+		
+		allEmbeddings = append(allEmbeddings, batchEmbeddings...)
+	}
+	
+	return allEmbeddings, nil
+}
+
 // HybridProvider tries Ollama first, falls back to OpenAI
 type HybridProvider struct {
 	ollama *OllamaProvider
@@ -258,4 +358,24 @@ func (p *HybridProvider) GetActiveProvider() string {
 		return "OpenAI (API)"
 	}
 	return "None"
+}
+
+// GenerateBatchEmbeddings generates embeddings for multiple texts using the best available provider
+func (p *HybridProvider) GenerateBatchEmbeddings(texts []string) ([][]float32, error) {
+	// Try Ollama first if available
+	if p.useOllama {
+		embeddings, err := p.ollama.GenerateBatchEmbeddings(texts)
+		if err == nil {
+			return embeddings, nil
+		}
+		// If Ollama fails, mark as unavailable and try OpenAI
+		p.useOllama = false
+	}
+	
+	// Fall back to OpenAI
+	if p.openai != nil {
+		return p.openai.GenerateBatchEmbeddings(texts)
+	}
+	
+	return nil, fmt.Errorf("no embedding provider available (Ollama not running, OpenAI key not configured)")
 }

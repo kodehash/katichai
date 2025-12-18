@@ -33,10 +33,15 @@ type EmbeddingsConfig struct {
 
 // AnalysisConfig contains code analysis thresholds
 type AnalysisConfig struct {
-	MaxFunctionLength   int            `yaml:"max_function_length"`
-	ComplexityThreshold int            `yaml:"complexity_threshold"`
-	SimilarityThreshold float64        `yaml:"similarity_threshold"`
-	Sampling            SamplingConfig `yaml:"sampling,omitempty"`
+	MaxFunctionLength     int            `yaml:"max_function_length"`
+	ComplexityThreshold   int            `yaml:"complexity_threshold"`
+	SimilarityThreshold   float64        `yaml:"similarity_threshold"`
+	Sampling              SamplingConfig `yaml:"sampling,omitempty"`
+	
+	// Similarity Detection Settings
+	MinFunctionLines      int     `yaml:"min_function_lines"`       // Minimum lines to check (default: 5)
+	DuplicateThreshold    float64 `yaml:"duplicate_threshold"`      // Duplicate threshold (default: 0.85)
+	IgnoreTrivialPatterns bool    `yaml:"ignore_trivial_patterns"`  // Skip getters/setters/CRUD (default: true)
 }
 
 // SamplingConfig contains diff sampling settings
@@ -62,9 +67,12 @@ func DefaultConfig() *Config {
 			Provider: "local",
 		},
 		Analysis: AnalysisConfig{
-			MaxFunctionLength:   50,
-			ComplexityThreshold: 10,
-			SimilarityThreshold: 0.85,
+			MaxFunctionLength:     50,
+			ComplexityThreshold:   10,
+			SimilarityThreshold:   0.70,
+			MinFunctionLines:      5,
+			DuplicateThreshold:    0.85,
+			IgnoreTrivialPatterns: true,
 			Sampling: SamplingConfig{
 				Enabled:        true,
 				MaxFiles:       20,
