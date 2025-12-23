@@ -44,8 +44,8 @@ checksum:
 # GitHub release configuration
 release:
   github:
-    owner: katichai
-    name: katich
+    owner: kodehash
+    name: katichai
   # Mark as pre-release for alpha, beta, rc tags
   prerelease: auto
   # Generate release notes from git commits
