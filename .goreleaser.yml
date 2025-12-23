@@ -1,0 +1,66 @@
+# GoReleaser configuration for katich CLI
+project_name: katich
+
+# Build configuration
+builds:
+  - id: katich
+    main: ./cmd/katich
+    # Binary naming: katich-{os}-{arch}
+    binary: katich-{{ .Os }}-{{ .Arch }}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - 6
+      - 7
+    # Build flags for version information
+    ldflags:
+      - -s -w
+      - -X github.com/katichai/katich/internal/cmd.Version={{.Version}}
+      - -X github.com/katichai/katich/internal/cmd.GitCommit={{.Commit}}
+      - -X github.com/katichai/katich/internal/cmd.BuildDate={{.Date}}
+
+# Archive configuration
+archives:
+  - id: default
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
+    format_overrides:
+      - goos: linux
+        format: tar.gz
+      - goos: darwin
+        format: tar.gz
+    files:
+      - README.md
+
+# Checksums
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
+# GitHub release configuration
+release:
+  github:
+    owner: katichai
+    name: katich
+  # Mark as pre-release for alpha, beta, rc tags
+  prerelease: auto
+  # Generate release notes from git commits
+  mode: replace
+  header: |
+    ## {{ .TagName }}
+    
+    {{ .ReleaseNotes }}
+
+# Changelog configuration
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
