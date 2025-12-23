@@ -121,3 +121,18 @@ func (r *Repository) GetRelativePath(absPath string) (string, error) {
 	}
 	return relPath, nil
 }
+
+// GetProjectName extracts the project name from the repository directory name
+func (r *Repository) GetProjectName() (string, error) {
+	if r.RootPath == "" {
+		return "", fmt.Errorf("repository root path is empty")
+	}
+	
+	// Extract directory name from root path
+	projectName := filepath.Base(r.RootPath)
+	if projectName == "" || projectName == "." || projectName == "/" {
+		return "", fmt.Errorf("failed to extract project name from path: %s", r.RootPath)
+	}
+	
+	return projectName, nil
+}

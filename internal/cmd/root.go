@@ -150,11 +150,20 @@ func runDoctor() error {
 	// Check LLM API key and connection
 	llmStatus := "⚠️  Not configured (required for reviews)"
 	if cfg != nil {
-		if cfg.LLM.Provider != "local" && cfg.LLM.Provider != "ollama" && cfg.LLM.APIKey == "" {
+		// Check if API server is enabled
+		if cfg.APIServer.Enabled {
+			if cfg.APIServer.URL == "" {
+				llmStatus = fmt.Sprintf("❌ API server enabled but URL missing")
+			} else if cfg.APIServer.Token == "" {
+				llmStatus = fmt.Sprintf("❌ API server enabled but token missing")
+			} else {
+				llmStatus = fmt.Sprintf("✅ Configured via API server (%s)", cfg.LLM.Provider)
+			}
+		} else if cfg.LLM.Provider != "local" && cfg.LLM.Provider != "ollama" && cfg.LLM.APIKey == "" {
 			llmStatus = fmt.Sprintf("❌ Missing API key for %s", cfg.LLM.Provider)
 		} else {
-			// Try to connect
-			_, err := llm.NewClient(cfg.LLM)
+			// Try to connect (for doctor, we don't fetch from API, just check if config is valid)
+			_, err := llm.NewClient(cfg.LLM, "", nil)
 			if err != nil {
 				llmStatus = fmt.Sprintf("❌ Client init failed: %v", err)
 			} else {

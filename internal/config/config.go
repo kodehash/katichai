@@ -10,9 +10,11 @@ import (
 
 // Config represents the application configuration
 type Config struct {
-	LLM        LLMConfig        `yaml:"llm"`
-	Embeddings EmbeddingsConfig `yaml:"embeddings"`
-	Analysis   AnalysisConfig   `yaml:"analysis"`
+	ProjectName string          `yaml:"project_name,omitempty"`
+	LLM         LLMConfig       `yaml:"llm"`
+	Embeddings  EmbeddingsConfig `yaml:"embeddings"`
+	Analysis    AnalysisConfig  `yaml:"analysis"`
+	APIServer   APIServerConfig `yaml:"api_server,omitempty"`
 }
 
 // LLMConfig contains LLM provider settings
@@ -54,6 +56,13 @@ type SamplingConfig struct {
 	AdaptiveBudget bool `yaml:"adaptive_budget"`  // dynamically adjust based on context (default: true)
 }
 
+// APIServerConfig contains API server settings for fetching LLM keys
+type APIServerConfig struct {
+	Enabled bool   `yaml:"enabled"` // whether to use API server
+	URL     string `yaml:"url,omitempty"` // API server URL (from env var KATICH_API_SERVER_URL)
+	Token   string `yaml:"token,omitempty"` // authentication token (from config.yaml or env var KATICH_API_TOKEN)
+}
+
 // DefaultConfig returns a configuration with sensible defaults
 func DefaultConfig() *Config {
 	return &Config{
@@ -81,6 +90,9 @@ func DefaultConfig() *Config {
 				SkipTests:      false,
 				AdaptiveBudget: true,
 			},
+		},
+		APIServer: APIServerConfig{
+			Enabled: false,
 		},
 	}
 }
@@ -127,6 +139,16 @@ func (c *Config) overrideFromEnv() {
 	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" && c.LLM.Provider == "anthropic" {
 		c.LLM.APIKey = apiKey
 	}
+	
+	// Override API server URL from environment variable
+	if apiServerURL := os.Getenv("KATICH_API_SERVER_URL"); apiServerURL != "" {
+		c.APIServer.URL = apiServerURL
+	}
+	
+	// Override API server token from environment variable
+	if apiToken := os.Getenv("KATICH_API_TOKEN"); apiToken != "" {
+		c.APIServer.Token = apiToken
+	}
 }
 
 // Save saves the configuration to a file
@@ -162,8 +184,19 @@ func (c *Config) Validate() error {
 	if c.LLM.Provider == "" {
 		return fmt.Errorf("LLM provider is required")
 	}
-	if c.LLM.Provider != "local" && c.LLM.Provider != "ollama" && c.LLM.APIKey == "" {
-		return fmt.Errorf("LLM API key is required for provider: %s", c.LLM.Provider)
+	
+	// If API server is enabled, validate its configuration
+	if c.APIServer.Enabled {
+		if c.APIServer.URL == "" {
+			return fmt.Errorf("API server URL is required when API server is enabled (set KATICH_API_SERVER_URL)")
+		}
+		if c.APIServer.Token == "" {
+			return fmt.Errorf("API server token is required when API server is enabled (set KATICH_API_TOKEN or add to config)")
+		}
+		// If API server is enabled, api_key can be empty (will be fetched)
+	} else if c.LLM.Provider != "local" && c.LLM.Provider != "ollama" && c.LLM.APIKey == "" {
+		// If API server is disabled, api_key is required for non-local providers
+		return fmt.Errorf("LLM API key is required for provider: %s (or enable API server)", c.LLM.Provider)
 	}
 
 	// Check embeddings configuration
@@ -183,4 +216,16 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// GetProjectName returns the project name from config, or extracts from Git if not set
+func (c *Config) GetProjectName() (string, error) {
+	if c.ProjectName != "" {
+		return c.ProjectName, nil
+	}
+	
+	// Try to extract from Git repository
+	// Import git package would create circular dependency, so we'll handle this at call site
+	// For now, return empty string and let caller handle Git extraction
+	return "", fmt.Errorf("project name not set in config")
 }

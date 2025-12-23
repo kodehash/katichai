@@ -20,9 +20,17 @@ var initCmd = &cobra.Command{
 
 func runInit() {
 	// Check if we're in a Git repository
-	if _, err := git.FindRepository(); err != nil {
+	repo, err := git.FindRepository()
+	if err != nil {
 		fmt.Println("Error: katich works with git repos, kindly initiate git and add a commit for katich to compare and review")
 		return
+	}
+
+	// Extract project name from Git repository
+	projectName, err := repo.GetProjectName()
+	if err != nil {
+		fmt.Printf("Warning: failed to extract project name: %v\n", err)
+		projectName = "" // Will be empty in config
 	}
 
 	configDir := ".katich"
@@ -40,8 +48,13 @@ func runInit() {
 		return
 	}
 
-	// Default config content
-	defaultConfig := `llm:
+	// Build default config content with project name
+	projectNameLine := ""
+	if projectName != "" {
+		projectNameLine = fmt.Sprintf("project_name: %s\n\n", projectName)
+	}
+	
+	defaultConfig := projectNameLine + `llm:
   provider: ollama
   model: llama3
   base_url: http://localhost:11434

@@ -40,10 +40,12 @@ mv katich /usr/local/bin/
 ```
 
 ### Configuration
-Create a `.katich/config.yaml` in your home directory or project root.
+Create a `.katich/config.yaml` in your home directory or project root. The project name is automatically extracted from your Git repository during `katich init`.
 
 #### 1. Local LLM (Ollama) - Recommended for Privacy
 ```yaml
+project_name: my-project  # Auto-extracted from Git repo during init
+
 llm:
   provider: ollama
   model: llama3
@@ -54,29 +56,92 @@ embeddings:
   model: nomic-embed-text
 ```
 
-#### 2. OpenAI (GPT-4)
+#### 2. OpenAI (GPT-4) - Direct API Key
 ```yaml
+project_name: my-project
+
 llm:
   provider: openai
   model: gpt-4o
-  api_key: sk-...  # Or set via ENV: KATICH_LLM_API_KEY
+  api_key: sk-...  # Or set via ENV: KATICH_LLM_API_KEY or OPENAI_API_KEY
 
 embeddings:
   provider: openai
   model: text-embedding-3-small
 ```
 
-#### 3. Anthropic (Claude 3)
+#### 3. Anthropic (Claude 3) - Direct API Key
 ```yaml
+project_name: my-project
+
 llm:
   provider: anthropic
   model: claude-3-opus-20240229
-  api_key: sk-ant-...
+  api_key: sk-ant-...  # Or set via ENV: ANTHROPIC_API_KEY
 
 embeddings:
   provider: openai  # Anthropic doesn't support embeddings yet, use OpenAI or Local
   model: text-embedding-3-small
 ```
+
+#### 4. Centralized API Server (Recommended for Teams)
+Fetch LLM API keys from a centralized server instead of storing them in config files.
+
+**Environment Variables:**
+```bash
+export KATICH_API_SERVER_URL="https://api.example.com/api/v1/keys"  # Full API endpoint URL
+export KATICH_API_TOKEN="your-api-token"
+```
+
+**Config File:**
+```yaml
+project_name: my-project  # Used to fetch the correct API key from server
+
+llm:
+  provider: openai
+  model: gpt-4o
+  # api_key: omitted - will be fetched from API server
+
+api_server:
+  enabled: true
+  # url: from KATICH_API_SERVER_URL env var (required, must include full API path)
+  token: "your-api-token"  # or from KATICH_API_TOKEN env var (env var takes precedence)
+```
+
+**How it works:**
+- When `api_server.enabled: true`, Katich will fetch the LLM API key from the centralized server
+- The API server receives the `project_name` and `provider` to return the appropriate key
+- Fetched keys are cached for 1 hour to reduce API calls
+- If the API fetch fails, the operation will error (no fallback to config)
+
+**API Server Endpoint:**
+The API server should implement:
+- **Endpoint**: `POST {KATICH_API_SERVER_URL}` (must include the full path, e.g., `https://api.example.com/api/v1/keys`)
+- **Headers**: 
+  - `Authorization: Bearer {KATICH_API_TOKEN}`
+  - `Content-Type: application/json`
+- **Request Body**:
+  ```json
+  {
+    "project_name": "my-project",
+    "provider": "openai"
+  }
+  ```
+- **Response**:
+  ```json
+  {
+    "api_key": "sk-...",
+    "expires_at": "2024-01-01T00:00:00Z"  // optional
+  }
+  ```
+
+#### Environment Variable Overrides
+All API keys can be overridden via environment variables (takes precedence over config):
+- `KATICH_LLM_API_KEY` - Overrides `llm.api_key`
+- `OPENAI_API_KEY` - Overrides `llm.api_key` when provider is `openai`
+- `ANTHROPIC_API_KEY` - Overrides `llm.api_key` when provider is `anthropic`
+- `KATICH_API_SERVER_URL` - Sets API server URL (required when `api_server.enabled: true`)
+- `KATICH_API_TOKEN` - Sets API server authentication token (overrides `api_server.token`)
 
 ## ⚡ Quick Start
 

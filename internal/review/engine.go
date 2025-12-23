@@ -23,8 +23,34 @@ type ReviewEngine struct {
 
 // NewEngine creates a new ReviewEngine
 func NewEngine(cfg *config.Config, reviewer *Reviewer) (*ReviewEngine, error) {
+	// Get project name from config or extract from Git
+	projectName, err := cfg.GetProjectName()
+	if err != nil {
+		// Try to extract from Git repository
+		repo, repoErr := git.FindRepository()
+		if repoErr != nil {
+			return nil, fmt.Errorf("failed to get project name: %w (also failed to find Git repo: %v)", err, repoErr)
+		}
+		projectName, repoErr = repo.GetProjectName()
+		if repoErr != nil {
+			return nil, fmt.Errorf("failed to get project name: %w (also failed to extract from Git: %v)", err, repoErr)
+		}
+	}
+	
+	// Create KeyFetcher if API server is enabled
+	var keyFetcher *llm.KeyFetcher
+	if cfg.APIServer.Enabled {
+		if cfg.APIServer.URL == "" {
+			return nil, fmt.Errorf("API server URL is required when API server is enabled")
+		}
+		if cfg.APIServer.Token == "" {
+			return nil, fmt.Errorf("API server token is required when API server is enabled")
+		}
+		keyFetcher = llm.NewKeyFetcher(cfg.APIServer.URL, cfg.APIServer.Token)
+	}
+	
 	// Initialize LLM Client
-	client, err := llm.NewClient(cfg.LLM)
+	client, err := llm.NewClient(cfg.LLM, projectName, keyFetcher)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize LLM client: %w", err)
 	}
