@@ -50,10 +50,6 @@ release:
   prerelease: auto
   # Generate release notes from git commits
   mode: replace
-  header: |
-    ## {{ .Tag }}
-    
-    {{ .ReleaseNotes }}
 
 # Changelog configuration
 changelog:
