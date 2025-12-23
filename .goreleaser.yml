@@ -51,7 +51,7 @@ release:
   # Generate release notes from git commits
   mode: replace
   header: |
-    ## {{ .TagName }}
+    ## {{ .Tag }}
     
     {{ .ReleaseNotes }}
 
