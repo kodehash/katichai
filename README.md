@@ -26,10 +26,36 @@ Katichai prevents unnecessary AI-generated code, detects duplicated logic, enfor
 
 ### Installation
 
+#### Option 1: Download Pre-built Binary (Recommended)
+
+**macOS (Apple Silicon):**
+```bash
+curl -L https://github.com/kodehash/katichai/releases/latest/download/katich_darwin_arm64.tar.gz | tar -xz
+xattr -d com.apple.quarantine katich-darwin-arm64 2>/dev/null || true
+sudo mv katich-darwin-arm64 /usr/local/bin/katich
+```
+
+**macOS (Intel):**
+```bash
+curl -L https://github.com/kodehash/katichai/releases/latest/download/katich_darwin_amd64.tar.gz | tar -xz
+xattr -d com.apple.quarantine katich-darwin-amd64 2>/dev/null || true
+sudo mv katich-darwin-amd64 /usr/local/bin/katich
+```
+
+**Linux:**
+```bash
+curl -L https://github.com/kodehash/katichai/releases/latest/download/katich_linux_amd64.tar.gz | tar -xz
+sudo mv katich-linux-amd64 /usr/local/bin/katich
+```
+
+**Note for macOS:** If you see a security warning, the `xattr` command above removes the quarantine attribute. Alternatively, right-click the binary in Finder → "Open" → "Open" in the security dialog.
+
+#### Option 2: Build from Source
+
 ```bash
 # Clone the repository
-git clone https://github.com/katichai/katich.git
-cd katich
+git clone https://github.com/kodehash/katichai.git
+cd katichai
 
 # Install dependencies and build
 go mod download

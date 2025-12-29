@@ -20,7 +20,7 @@ func (f *Formatter) FormatText(report *ReviewReport) string {
 
 	// Header
 	sb.WriteString("\n════════════════════════════════════════════════════════════\n")
-	sb.WriteString(fmt.Sprintf(" 🤖 AI CODE REVIEW REPORT   (Score: %d/100)   [%s]\n", report.Score, report.Status))
+	sb.WriteString(" 🤖 AI CODE REVIEW REPORT\n")
 	sb.WriteString("════════════════════════════════════════════════════════════\n\n")
 
 	// Token Usage
@@ -37,13 +37,17 @@ func (f *Formatter) FormatText(report *ReviewReport) string {
 		sb.WriteString(report.Summary + "\n\n")
 	}
 
-	// Critical Issues (exclude static analysis)
+	// Critical Issues (exclude static analysis and duplicate summaries)
 	criticalIssues := []ReviewIssue{}
 	staticIssues := []ReviewIssue{}
+	duplicateCount := 0
 	
 	for _, issue := range report.Issues {
 		if issue.Category == "STATIC_ANALYSIS" {
 			staticIssues = append(staticIssues, issue)
+		} else if strings.Contains(issue.Description, "duplicate") || strings.Contains(issue.Description, "Duplicate") {
+			// Count duplicates for summary, don't show details
+			duplicateCount++
 		} else {
 			criticalIssues = append(criticalIssues, issue)
 		}
@@ -66,6 +70,13 @@ func (f *Formatter) FormatText(report *ReviewReport) string {
 	} else {
 		sb.WriteString("✅ No critical issues found.\n\n")
 	}
+	
+	// Show duplicate summary
+	if duplicateCount > 0 {
+		sb.WriteString("🔄 DUPLICATE CODE\n")
+		sb.WriteString(fmt.Sprintf("  • Found %d duplicate code block%s (see HTML report for details)\n", duplicateCount, pluralize(duplicateCount)))
+		sb.WriteString("\n")
+	}
 
 	// Suggestions
 	if len(report.Suggestions) > 0 {
@@ -76,21 +87,27 @@ func (f *Formatter) FormatText(report *ReviewReport) string {
 		sb.WriteString("\n")
 	}
 
-	// Static Analysis (grouped by type)
+	// Static Analysis (summary only - show file counts per type)
 	if len(staticIssues) > 0 {
 		sb.WriteString("📊 STATIC ANALYSIS (informational, not affecting score)\n")
 		
-		// Group by subcategory
-		grouped := make(map[string][]ReviewIssue)
+		// Group by subcategory and count unique files
+		grouped := make(map[string]map[string]bool) // subcategory -> set of files
 		for _, issue := range staticIssues {
 			subcategory := issue.Subcategory
 			if subcategory == "" {
 				subcategory = "other"
 			}
-			grouped[subcategory] = append(grouped[subcategory], issue)
+			if grouped[subcategory] == nil {
+				grouped[subcategory] = make(map[string]bool)
+			}
+			// Use location (file path) to count unique files
+			if issue.Location != "" {
+				grouped[subcategory][issue.Location] = true
+			}
 		}
 		
-		// Display groups
+		// Display summary with file counts
 		categoryNames := map[string]string{
 			"complexity":       "High Complexity",
 			"function_length":  "Long Functions",
@@ -102,20 +119,14 @@ func (f *Formatter) FormatText(report *ReviewReport) string {
 			"other":            "Other",
 		}
 		
-		for subcategory, issues := range grouped {
+		for subcategory, files := range grouped {
 			categoryName := categoryNames[subcategory]
 			if categoryName == "" {
 				categoryName = subcategory
 			}
 			
-			sb.WriteString(fmt.Sprintf("\n  %s (%d)\n", categoryName, len(issues)))
-			for _, issue := range issues {
-				sb.WriteString(fmt.Sprintf("    • %s", issue.Description))
-				if issue.Location != "" {
-					sb.WriteString(fmt.Sprintf(" - %s", issue.Location))
-				}
-				sb.WriteString("\n")
-			}
+			fileCount := len(files)
+			sb.WriteString(fmt.Sprintf("  • %s: %d file%s\n", categoryName, fileCount, pluralize(fileCount)))
 		}
 		sb.WriteString("\n")
 	}
@@ -140,7 +151,7 @@ func (f *Formatter) FormatMarkdown(report *ReviewReport) string {
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("# Code Review Report\n\n"))
-	sb.WriteString(fmt.Sprintf("**Status**: %s | **Score**: %d/100\n\n", report.Status, report.Score))
+	// Status and Score removed - scoring is subjective
 	
 	// Token Usage
 	if report.TokensUsed.TotalTokens > 0 {
@@ -171,17 +182,27 @@ func (f *Formatter) FormatMarkdown(report *ReviewReport) string {
 	return sb.String()
 }
 
-// formatAIAnalysis formats AI-generated code analysis section
+// formatAIAnalysis formats AI-generated code analysis section (summary only)
 func (f *Formatter) formatAIAnalysis(sb *strings.Builder, report *ReviewReport) {
 	if report.FileAnalysis == nil || len(report.FileAnalysis) == 0 {
 		return
 	}
 
-	// Collect all files with AI scores (including 0%)
-	aiFiles := make(map[string]interface{})
+	// Collect all files with AI scores (> 0%)
+	aiFiles := make([]struct {
+		path      string
+		percentage float64
+	}, 0)
+	
 	for filePath, analysis := range report.FileAnalysis {
-		if analysis.AIScore != nil {
-			aiFiles[filePath] = analysis
+		if analysis.AIScore != nil && analysis.AIScore.AIPercentage > 0 {
+			aiFiles = append(aiFiles, struct {
+				path      string
+				percentage float64
+			}{
+				path:      filePath,
+				percentage: analysis.AIScore.AIPercentage,
+			})
 		}
 	}
 
@@ -189,71 +210,19 @@ func (f *Formatter) formatAIAnalysis(sb *strings.Builder, report *ReviewReport) 
 		return
 	}
 
-	sb.WriteString("🤖 AI-GENERATED CODE ANALYSIS\n\n")
+	sb.WriteString("🤖 AI-GENERATED CODE ANALYSIS\n")
 	
-	// Count files with actual AI-generated code (> 0%)
-	aiGeneratedCount := 0
-	for filePath := range aiFiles {
-		analysis := report.FileAnalysis[filePath]
-		if analysis.AIScore != nil && analysis.AIScore.AIPercentage > 0 {
-			aiGeneratedCount++
-		}
-	}
-	
-	// Show summary
-	if aiGeneratedCount > 0 {
-		sb.WriteString(fmt.Sprintf("Files with likely AI-generated code: %d\n", aiGeneratedCount))
-		for filePath := range aiFiles {
-			analysis := report.FileAnalysis[filePath]
-			aiScore := analysis.AIScore
-			if aiScore.AIPercentage > 0 {
-				sb.WriteString(fmt.Sprintf("  • %s (%.0f%%)\n", filePath, aiScore.AIPercentage))
-			}
-		}
-	} else {
-		sb.WriteString("No AI-generated code patterns detected (all files scored 0%)\n")
+	// Show only file names and percentages (no detailed breakdown)
+	for _, file := range aiFiles {
+		sb.WriteString(fmt.Sprintf("  • %s (%.0f%%)\n", file.path, file.percentage))
 	}
 	sb.WriteString("\n")
+}
 
-	// Then show detailed analysis (only for files with AI% > 0)
-	for filePath := range aiFiles {
-		analysis := report.FileAnalysis[filePath]
-		aiScore := analysis.AIScore
-		
-		// Skip files with 0% in detailed view
-		if aiScore.AIPercentage == 0 {
-			continue
-		}
-
-		sb.WriteString(fmt.Sprintf("  📄 %s\n", filePath))
-		sb.WriteString(fmt.Sprintf("     AI-Generated: %.1f%% (%d/%d lines)\n",
-			aiScore.AIPercentage,
-			aiScore.AIGeneratedLOC,
-			aiScore.TotalLOC))
-		sb.WriteString(fmt.Sprintf("     Confidence: %.0f%%\n",
-			aiScore.OverallConfidence*100))
-
-		if len(aiScore.FunctionScores) > 0 {
-			sb.WriteString("     Functions:\n")
-			for _, fnScore := range aiScore.FunctionScores {
-				// Show top 2 indicators
-				indicatorCount := len(fnScore.Indicators)
-				if indicatorCount > 2 {
-					indicatorCount = 2
-				}
-				indicators := strings.Join(fnScore.Indicators[:indicatorCount], ", ")
-
-				sb.WriteString(fmt.Sprintf("       • %s (%.0f%% confidence) - %s",
-					fnScore.FunctionName,
-					fnScore.AIConfidence*100,
-					indicators))
-
-				if len(fnScore.Indicators) > 2 {
-					sb.WriteString(fmt.Sprintf(" +%d more", len(fnScore.Indicators)-2))
-				}
-				sb.WriteString("\n")
-			}
-		}
-		sb.WriteString("\n")
+// pluralize returns "s" if count != 1, otherwise ""
+func pluralize(count int) string {
+	if count == 1 {
+		return ""
 	}
+	return "s"
 }

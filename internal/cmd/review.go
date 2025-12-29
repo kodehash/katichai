@@ -24,6 +24,7 @@ var (
 	ciMode       bool
 	outputFormat string
 	outputFile   string
+	generateHTML bool
 )
 
 func init() {
@@ -36,6 +37,7 @@ func init() {
 	reviewCmd.PersistentFlags().BoolVar(&ciMode, "ci", false, "CI mode (exit with error code on issues)")
 	reviewCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "terminal", "output format (terminal, json, markdown, html)")
 	reviewCmd.PersistentFlags().StringVar(&outputFile, "output-file", "", "write output to file")
+	reviewCmd.PersistentFlags().BoolVar(&generateHTML, "html", false, "generate HTML report (overrides config setting)")
 }
 
 // reviewLatestCmd reviews the latest commit
@@ -106,6 +108,23 @@ func checkKatichInitialized() error {
 	return fmt.Errorf("katich not Initialized, run katich init to get started")
 }
 
+// printASCIIBanner prints the Katich AI ASCII art banner
+func printASCIIBanner() {
+	banner := `
+██╗  ██╗ █████╗ ████████╗██╗ ██████╗██╗  ██╗     █████╗ ██╗
+██║ ██╔╝██╔══██╗╚══██╔══╝██║██╔════╝██║  ██║    ██╔══██╗██║
+█████╔╝ ███████║   ██║   ██║██║     ███████║    ███████║██║
+██╔═██╗ ██╔══██║   ██║   ██║██║     ██╔══██║    ██╔══██║██║
+██║  ██╗██║  ██║   ██║   ██║╚██████╗██║  ██║    ██║  ██║██║
+╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚═╝ ╚═════╝╚═╝  ╚═╝    ╚═╝  ╚═╝╚═╝
+                                                           
+                                                             
+              Context-aware AI code review tool
+`
+	fmt.Print(banner)
+	fmt.Println()
+}
+
 func runReviewLatest() error {
 	// Check if katich is initialized
 	if err := checkKatichInitialized(); err != nil {
@@ -130,6 +149,11 @@ func runReviewLatest() error {
 		cfg = config.DefaultConfig()
 	}
 
+	// Override HTML generation if flag is set
+	if generateHTML {
+		cfg.Review.GenerateHTML = true
+	}
+
 	// Initialize legacy reviewer (used by Engine)
 	baseReviewer := review.NewReviewer(repo.RootPath, cfg)
 	
@@ -145,8 +169,12 @@ func runReviewLatest() error {
 		return fmt.Errorf("failed to get diff: %w", err)
 	}
 
+	// Print ASCII banner
+	printASCIIBanner()
+	
 	// Run comprehensive review
 	fmt.Println("🤖 Analyzing code changes with AI...")
+	// For "latest" command, pass empty string (engine will extract from diff)
 	report, err := engine.Review(diff)
 	if err != nil {
 		return fmt.Errorf("review failed: %w", err)
@@ -177,10 +205,10 @@ func runReviewLatest() error {
 		fmt.Println(output)
 	}
 
-	// Verify status for CI/CD
-	if ciMode && report.Status == "FAIL" {
-		return fmt.Errorf("review failed with score %d", report.Score)
-	}
+	// Verify status for CI/CD (commented out - scoring is subjective)
+	// if ciMode && report.Status == "FAIL" {
+	// 	return fmt.Errorf("review failed with score %d", report.Score)
+	// }
 
 	return nil
 }
@@ -195,6 +223,9 @@ func runReviewDiff(diffRange string) error {
 		return err
 	}
 	
+	// Print ASCII banner
+	printASCIIBanner()
+	
 	fmt.Printf("🔍 Reviewing diff range: %s\n", diffRange)
 	
 	// Find Git repository
@@ -207,6 +238,11 @@ func runReviewDiff(diffRange string) error {
 	cfg, err := config.Load(GetConfig())
 	if err != nil {
 		cfg = config.DefaultConfig()
+	}
+
+	// Override HTML generation if flag is set
+	if generateHTML {
+		cfg.Review.GenerateHTML = true
 	}
 
 	// Initialize legacy reviewer (used by Engine)
@@ -226,7 +262,7 @@ func runReviewDiff(diffRange string) error {
 
 	// Run comprehensive review with AI
 	fmt.Println("🤖 Analyzing code changes with AI...")
-	report, err := engine.Review(diff)
+	report, err := engine.Review(diff, diffRange)
 	if err != nil {
 		return fmt.Errorf("review failed: %w", err)
 	}
@@ -252,23 +288,26 @@ func runReviewDiff(diffRange string) error {
 			return err
 		}
 		fmt.Printf("✅ Report saved to %s\n", outputFile)
-	} else {
-		fmt.Println(output)
+		} else {
+			fmt.Println(output)
+		}
+
+		// Verify status for CI/CD (commented out - scoring is subjective)
+		// if ciMode && report.Status == "FAIL" {
+		// 	return fmt.Errorf("review failed with score %d", report.Score)
+		// }
+
+		return nil
 	}
 
-	// Verify status for CI/CD
-	if ciMode && report.Status == "FAIL" {
-		return fmt.Errorf("review failed with score %d", report.Score)
-	}
-
-	return nil
-}
-
-func runReviewFile(filePath string) error {
+	func runReviewFile(filePath string) error {
 	// Check if katich is initialized
 	if err := checkKatichInitialized(); err != nil {
 		return err
 	}
+	
+	// Print ASCII banner
+	printASCIIBanner()
 	
 	// TODO: Implement file review using Reviewer
 	fmt.Println("⚠️  Review file not fully implemented yet")

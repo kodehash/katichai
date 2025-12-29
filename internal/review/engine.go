@@ -3,8 +3,11 @@ package review
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/katichai/katich/internal/analysis"
 	"github.com/katichai/katich/internal/config"
@@ -19,6 +22,7 @@ type ReviewEngine struct {
 	reviewer    *Reviewer
 	synthesizer *Synthesizer
 	pmtBuilder  *llm.PromptBuilder
+	diffRange   string // Stores the diff range for HTML report
 }
 
 // NewEngine creates a new ReviewEngine
@@ -65,7 +69,12 @@ func NewEngine(cfg *config.Config, reviewer *Reviewer) (*ReviewEngine, error) {
 }
 
 // Review performs a comprehensive review of the code changes
-func (e *ReviewEngine) Review(diff *git.Diff) (*ReviewReport, error) {
+// diffRange is optional and used for HTML report display (e.g., "main..feature" or "HEAD~3..HEAD")
+func (e *ReviewEngine) Review(diff *git.Diff, diffRange ...string) (*ReviewReport, error) {
+	// Store diff range if provided
+	if len(diffRange) > 0 && diffRange[0] != "" {
+		e.diffRange = diffRange[0]
+	}
 	// 1. Run Local Analysis (Static + Similarity)
 	// This uses the existing Reviewer logic
 	localResult, err := e.reviewer.ReviewDiff(diff)
@@ -253,6 +262,18 @@ func (e *ReviewEngine) Review(diff *git.Diff) (*ReviewReport, error) {
 		TotalTokens:  resp.Usage.TotalTokens,
 	}
 	report := e.synthesizer.Synthesize(filteredLLMOutput, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage)
+
+	// 8. Populate duplicate blocks and AI patterns for HTML report
+	e.populateDuplicateBlocks(report, exactDupDetector, localResult, diff)
+	e.populateAIPatterns(report, localResult)
+
+	// 9. Generate HTML report if enabled
+	if e.shouldGenerateHTML() {
+		if err := e.generateHTMLReport(report, diff, e.diffRange); err != nil {
+			// Log error but don't fail the review
+			fmt.Printf("Warning: Failed to generate HTML report: %v\n", err)
+		}
+	}
 
 	return report, nil
 }
@@ -442,5 +463,156 @@ func (e *ReviewEngine) findActuallyChangedFunctions(diff *git.Diff, fileAnalysis
 func (e *ReviewEngine) removeCriticalIssues(llmOutput string) string {
 	issuesSectionRegex := regexp.MustCompile(`(?s)(## Critical Issues.*?\n)(.*?)(##|$)`)
 	return issuesSectionRegex.ReplaceAllString(llmOutput, "$1- None. The changes do not introduce new issues.\n\n$3")
+}
+
+// populateDuplicateBlocks extracts structured duplicate block information
+func (e *ReviewEngine) populateDuplicateBlocks(report *ReviewReport, exactDupDetector *analysis.ExactDuplicationDetector, localResult *ReviewResult, diff *git.Diff) {
+	// Extract from exact duplicates
+	for _, dups := range exactDupDetector.GetDuplicates() {
+		if len(dups) < 2 {
+			continue
+		}
+		// Use first as original, rest as duplicates
+		original := dups[0]
+		for i := 1; i < len(dups); i++ {
+			dup := dups[i]
+			report.DuplicateBlocks = append(report.DuplicateBlocks, DuplicateBlockInfo{
+				OriginalFile:   original.FilePath,
+				OriginalStart:  original.StartLine,
+				OriginalEnd:    original.EndLine,
+				DuplicateFile:   dup.FilePath,
+				DuplicateStart: dup.StartLine,
+				DuplicateEnd:   dup.EndLine,
+				Similarity:     1.0, // Exact duplicate
+				Lines:          original.EndLine - original.StartLine + 1,
+			})
+		}
+	}
+
+	// Extract from similarity results
+	for _, simResults := range localResult.Duplicates {
+		for _, simResult := range simResults {
+			// Find the original function in the diff
+			for _, file := range diff.Files {
+				if file.Path == simResult.FilePath {
+					// Try to find matching function in file analysis
+					if analysis, exists := localResult.FileAnalysis[file.Path]; exists {
+						for _, fn := range analysis.Functions {
+							if fn.Name == simResult.FuncName {
+								report.DuplicateBlocks = append(report.DuplicateBlocks, DuplicateBlockInfo{
+									OriginalFile:    file.Path,
+									OriginalStart:   fn.StartLine,
+									OriginalEnd:     fn.EndLine,
+									DuplicateFile:    simResult.FilePath,
+									DuplicateStart:   simResult.StartLine,
+									DuplicateEnd:     simResult.EndLine,
+									Similarity:      float64(simResult.Similarity),
+									Lines:           fn.EndLine - fn.StartLine + 1,
+								})
+								break
+							}
+						}
+					}
+					break
+				}
+			}
+		}
+	}
+}
+
+// populateAIPatterns extracts AI patterns from file analysis
+func (e *ReviewEngine) populateAIPatterns(report *ReviewReport, localResult *ReviewResult) {
+	if report.AIPatterns == nil {
+		report.AIPatterns = make(map[string][]analysis.AICodePattern)
+	}
+
+	aiDetector := analysis.NewAICodeDetector()
+	for filePath, fileAnalysis := range localResult.FileAnalysis {
+		patterns := aiDetector.DetectAIPatterns(fileAnalysis)
+		if len(patterns) > 0 {
+			report.AIPatterns[filePath] = patterns
+		}
+	}
+}
+
+// shouldGenerateHTML checks if HTML generation should be enabled
+func (e *ReviewEngine) shouldGenerateHTML() bool {
+	return e.config.Review.GenerateHTML
+}
+
+// generateHTMLReport generates and saves HTML report
+func (e *ReviewEngine) generateHTMLReport(report *ReviewReport, diff *git.Diff, diffRange string) error {
+	// Get repo root for file reading
+	repo, err := git.FindRepository()
+	if err != nil {
+		return fmt.Errorf("failed to find repository: %w", err)
+	}
+
+	// Collect file paths
+	filePaths := make([]string, 0)
+	for filePath := range report.FileAnalysis {
+		filePaths = append(filePaths, filePath)
+	}
+
+	// Read file contents
+	fileReader := NewFileReader(repo.RootPath)
+	fileContents, err := fileReader.ReadFiles(filePaths)
+	if err != nil {
+		// Continue with partial content
+	}
+
+	// Extract diff information
+	diffInfo := &DiffInfo{}
+	if diffRange != "" {
+		diffInfo.Range = diffRange
+		// Extract commit SHAs from range (e.g., "main..feature" -> get SHAs for both)
+		if strings.Contains(diffRange, "..") {
+			parts := strings.Split(diffRange, "..")
+			if len(parts) == 2 {
+				// Get commit SHAs for both sides
+				if fromCommit, err := repo.GetCommit(parts[0]); err == nil {
+					diffInfo.FromCommit = fromCommit.ShortHash
+				}
+				if toCommit, err := repo.GetCommit(parts[1]); err == nil {
+					diffInfo.ToCommit = toCommit.ShortHash
+				}
+			}
+		}
+	} else if diff.Commit != nil {
+		// For single commit review, show parent and current commit
+		diffInfo.ToCommit = diff.Commit.ShortHash
+		// Try to get parent commit
+		if parentCommit, err := repo.GetCommit(diff.Commit.Hash + "^"); err == nil {
+			diffInfo.FromCommit = parentCommit.ShortHash
+		}
+	}
+	
+	// Generate HTML
+	formatter := NewFormatter()
+	htmlContent := formatter.FormatHTML(report, fileContents, diffInfo)
+
+	// Determine output path
+	outputPath := e.config.Review.HTMLOutputPath
+	if outputPath == "" {
+		outputPath = ".katich/reports"
+	}
+
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(outputPath, 0755); err != nil {
+		return fmt.Errorf("failed to create reports directory: %w", err)
+	}
+
+	// Generate filename with timestamp
+	timestamp := time.Now().Format("20060102-150405")
+	filename := fmt.Sprintf("review-%s.html", timestamp)
+	fullPath := filepath.Join(outputPath, filename)
+
+	// Write file
+	if err := os.WriteFile(fullPath, []byte(htmlContent), 0644); err != nil {
+		return fmt.Errorf("failed to write HTML file: %w", err)
+	}
+
+	fmt.Printf("📄 HTML report saved to: %s\n", fullPath)
+	return nil
 }
 

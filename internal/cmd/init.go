@@ -55,14 +55,18 @@ func runInit() {
 	}
 	
 	defaultConfig := projectNameLine + `llm:
-  provider: ollama
-  model: llama3
-  base_url: http://localhost:11434
+  provider: openai
+  model: gpt-4
+  api_key: ""  # Add your OpenAI API key here
   max_input_tokens: 20000
 
 embeddings:
-  provider: ollama
-  model: nomic-embed-text
+  provider: local
+  model: jina-code-v2
+
+review:
+  generate_html: true
+  html_output_path: .katich/reports
 
 analysis:
   max_function_length: 50
@@ -87,8 +91,10 @@ analysis:
 	}
 
 	fmt.Println("✅ Initialized katich configuration!")
-	fmt.Printf("Created %s with default settings (Ollama).\n", configFile)
-	fmt.Println("Next steps:")
-	fmt.Println("  1. Run 'katich context build' to analyze your codebase")
-	fmt.Println("  2. Run 'katich review latest' to review changes")
+	fmt.Printf("Created %s with default settings (OpenAI).\n", configFile)
+	fmt.Println("\nNext steps:")
+	fmt.Println("  1. Add your OpenAI API key to config.yaml (llm.api_key)")
+	fmt.Println("  2. Run 'katich context build' to analyze your codebase")
+	fmt.Println("  3. Run 'katich review latest' to review the latest commit with previous commit")
+	fmt.Println("  4. Run 'katich review diff base_branch..new_branch' to perform review between two branches")
 }

@@ -15,6 +15,7 @@ type Config struct {
 	Embeddings  EmbeddingsConfig `yaml:"embeddings"`
 	Analysis    AnalysisConfig  `yaml:"analysis"`
 	APIServer   APIServerConfig `yaml:"api_server,omitempty"`
+	Review      ReviewConfig    `yaml:"review,omitempty"`
 }
 
 // LLMConfig contains LLM provider settings
@@ -63,6 +64,12 @@ type APIServerConfig struct {
 	Token   string `yaml:"token,omitempty"` // authentication token (from config.yaml or env var KATICH_API_TOKEN)
 }
 
+// ReviewConfig contains review output settings
+type ReviewConfig struct {
+	GenerateHTML  bool   `yaml:"generate_html"`  // whether to generate HTML reports
+	HTMLOutputPath string `yaml:"html_output_path,omitempty"` // output path for HTML reports (default: .katich/reports)
+}
+
 // DefaultConfig returns a configuration with sensible defaults
 func DefaultConfig() *Config {
 	return &Config{
@@ -93,6 +100,10 @@ func DefaultConfig() *Config {
 		},
 		APIServer: APIServerConfig{
 			Enabled: false,
+		},
+		Review: ReviewConfig{
+			GenerateHTML:   true,  // Default to true for HTML reports
+			HTMLOutputPath: ".katich/reports",
 		},
 	}
 }
@@ -148,6 +159,11 @@ func (c *Config) overrideFromEnv() {
 	// Override API server token from environment variable
 	if apiToken := os.Getenv("KATICH_API_TOKEN"); apiToken != "" {
 		c.APIServer.Token = apiToken
+	}
+	
+	// Override review HTML generation from environment variable
+	if generateHTML := os.Getenv("KATICH_GENERATE_HTML"); generateHTML == "true" || generateHTML == "1" {
+		c.Review.GenerateHTML = true
 	}
 }
 

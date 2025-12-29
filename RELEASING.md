@@ -67,22 +67,35 @@ Each release includes:
 ## Downloading Releases
 
 Users can download releases from:
-- **GitHub Releases**: https://github.com/katichai/katich/releases
-- **Latest Release**: https://github.com/katichai/katich/releases/latest
+- **GitHub Releases**: https://github.com/kodehash/katichai/releases
+- **Latest Release**: https://github.com/kodehash/katichai/releases/latest
 
 ### Installation Examples
 
 **macOS (Apple Silicon):**
 ```bash
-curl -L https://github.com/katichai/katich/releases/latest/download/katich_darwin_arm64.tar.gz | tar -xz
+curl -L https://github.com/kodehash/katichai/releases/latest/download/katich_darwin_arm64.tar.gz | tar -xz
+
+# Remove macOS quarantine attribute (required for unsigned binaries)
+xattr -d com.apple.quarantine katich-darwin-arm64 2>/dev/null || true
+
 sudo mv katich-darwin-arm64 /usr/local/bin/katich
 ```
 
 **macOS (Intel):**
 ```bash
-curl -L https://github.com/katichai/katich/releases/latest/download/katich_darwin_amd64.tar.gz | tar -xz
+curl -L https://github.com/kodehash/katichai/releases/latest/download/katich_darwin_amd64.tar.gz | tar -xz
+
+# Remove macOS quarantine attribute (required for unsigned binaries)
+xattr -d com.apple.quarantine katich-darwin-amd64 2>/dev/null || true
+
 sudo mv katich-darwin-amd64 /usr/local/bin/katich
 ```
+
+**Note for macOS users:** If you see a "cannot be opened" security warning:
+1. **Option 1 (Recommended):** Run the `xattr -d com.apple.quarantine` command above before moving the binary
+2. **Option 2:** Right-click the binary in Finder → Select "Open" → Click "Open" in the security dialog (first time only)
+3. **Option 3:** Go to System Settings → Privacy & Security → Scroll down and click "Open Anyway" next to the blocked app
 
 **Linux:**
 ```bash
