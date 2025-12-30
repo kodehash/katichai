@@ -19,6 +19,21 @@ type ReviewReport struct {
 	TokensUsed      TokenUsage                        `json:"tokens_used"`
 	DuplicateBlocks []DuplicateBlockInfo              `json:"duplicate_blocks,omitempty"`
 	AIPatterns      map[string][]analysis.AICodePattern `json:"ai_patterns,omitempty"`
+	SamplingInfo    *SamplingInfo                     `json:"sampling_info,omitempty"`
+}
+
+// SamplingInfo contains information about which files were reviewed and which were ignored
+type SamplingInfo struct {
+	TotalFiles      int                      `json:"total_files"`
+	ReviewedFiles   []string                 `json:"reviewed_files"`
+	IgnoredFiles    []IgnoredFile            `json:"ignored_files"`
+	FilteredReasons map[string]int           `json:"filtered_reasons"`
+}
+
+// IgnoredFile represents a file that was ignored during sampling
+type IgnoredFile struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
 }
 
 // DuplicateBlockInfo represents structured duplicate code information

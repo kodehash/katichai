@@ -38,6 +38,9 @@ func (f *Formatter) FormatHTML(report *ReviewReport, fileContents map[string]str
             </div>
             <nav class="p-2">
                 <a href="#dashboard" class="block px-3 py-2 rounded hover:bg-gray-100 mb-2 text-sm font-medium text-gray-700">📊 Dashboard</a>
+                {{if .SamplingInfo}}
+                <a href="#file-sampling" class="block px-3 py-2 rounded hover:bg-gray-100 mb-2 text-sm font-medium text-gray-700">📁 File Sampling</a>
+                {{end}}
                 <a href="#critical-issues" class="block px-3 py-2 rounded hover:bg-gray-100 mb-2 text-sm font-medium text-gray-700">⚠️ Critical Issues</a>
                 {{if .HasDuplicates}}
                 <a href="#duplicates" class="block px-3 py-2 rounded hover:bg-gray-100 mt-2 text-sm font-medium text-gray-700">🔄 Duplicate Code</a>
@@ -56,6 +59,9 @@ func (f *Formatter) FormatHTML(report *ReviewReport, fileContents map[string]str
                 <div class="flex items-center justify-between">
                     <div>
                         <h1 class="text-3xl font-bold text-gray-900">Katich AI Code Review Report</h1>
+                        {{if .DiffInfo.ProjectName}}
+                        <p class="text-lg font-semibold text-gray-700 mt-2">{{.DiffInfo.ProjectName}}</p>
+                        {{end}}
                         <p class="text-gray-600 mt-1">Generated on {{.Timestamp}}</p>
                         {{if .DiffInfo}}
                         <p class="text-gray-500 text-sm mt-1">
@@ -87,22 +93,30 @@ func (f *Formatter) FormatHTML(report *ReviewReport, fileContents map[string]str
             <section id="dashboard" class="p-6">
                 <h2 class="text-2xl font-bold text-gray-900 mb-4">📊 Dashboard</h2>
                 <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                    {{if gt .FileCount 0}}
                     <div class="bg-white p-4 rounded-lg shadow">
                         <div class="text-sm text-gray-600">Total Files</div>
                         <div class="text-2xl font-bold text-gray-900">{{.FileCount}}</div>
                     </div>
+                    {{end}}
+                    {{if gt .CriticalIssueCount 0}}
                     <div class="bg-white p-4 rounded-lg shadow">
                         <div class="text-sm text-gray-600">Critical Issues</div>
                         <div class="text-2xl font-bold text-red-600">{{.CriticalIssueCount}}</div>
                     </div>
+                    {{end}}
+                    {{if gt .AIFileCount 0}}
                     <div class="bg-white p-4 rounded-lg shadow">
                         <div class="text-sm text-gray-600">AI-Generated Files</div>
                         <div class="text-2xl font-bold text-yellow-600">{{.AIFileCount}}</div>
                     </div>
+                    {{end}}
+                    {{if gt .DuplicateCount 0}}
                     <div class="bg-white p-4 rounded-lg shadow">
                         <div class="text-sm text-gray-600">Duplicates</div>
                         <div class="text-2xl font-bold text-blue-600">{{.DuplicateCount}}</div>
                     </div>
+                    {{end}}
                 </div>
                 {{if .Summary}}
                 <div class="bg-white p-4 rounded-lg shadow">
@@ -111,6 +125,52 @@ func (f *Formatter) FormatHTML(report *ReviewReport, fileContents map[string]str
                 </div>
                 {{end}}
             </section>
+
+            <!-- File Sampling -->
+            {{if .SamplingInfo}}
+            <section id="file-sampling" class="p-6 border-t border-gray-200">
+                <button onclick="toggleSection('file-sampling-content')" class="flex items-center justify-between w-full text-left">
+                    <div>
+                        <h2 class="text-2xl font-bold text-gray-900">📁 File Sampling</h2>
+                        <p class="text-sm text-gray-500 mt-1">{{.SamplingInfo.ReviewedCount}} reviewed, {{.SamplingInfo.IgnoredCount}} ignored ({{.SamplingInfo.TotalFiles}} total)</p>
+                    </div>
+                    <span class="text-gray-500" id="file-sampling-toggle">▶</span>
+                </button>
+                <div id="file-sampling-content" class="mt-4" style="display: none;">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <!-- Reviewed Files -->
+                        <div>
+                            <h3 class="text-lg font-semibold text-gray-900 mb-3">✅ Reviewed Files ({{.SamplingInfo.ReviewedCount}})</h3>
+                            <div class="bg-white rounded-lg shadow max-h-96 overflow-y-auto">
+                                <ul class="divide-y divide-gray-200">
+                                    {{range .SamplingInfo.ReviewedFiles}}
+                                    <li class="p-3 hover:bg-gray-50">
+                                        <div class="text-sm font-medium text-gray-900">{{.}}</div>
+                                    </li>
+                                    {{end}}
+                                </ul>
+                            </div>
+                        </div>
+                        <!-- Ignored Files -->
+                        <div>
+                            <h3 class="text-lg font-semibold text-gray-900 mb-3">⏭️ Ignored Files ({{.SamplingInfo.IgnoredCount}})</h3>
+                            <div class="bg-white rounded-lg shadow max-h-96 overflow-y-auto">
+                                <ul class="divide-y divide-gray-200">
+                                    {{range .SamplingInfo.IgnoredFiles}}
+                                    <li class="p-3 hover:bg-gray-50">
+                                        <div class="text-sm font-medium text-gray-900">{{.Path}}</div>
+                                        <div class="text-xs text-gray-500 mt-1">
+                                            <span class="px-2 py-1 bg-gray-100 rounded">{{.ReasonLabel}}</span>
+                                        </div>
+                                    </li>
+                                    {{end}}
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+            {{end}}
 
             <!-- Suggestions -->
             {{if .Suggestions}}
@@ -389,15 +449,31 @@ func (f *Formatter) FormatHTML(report *ReviewReport, fileContents map[string]str
 
 // DiffInfo contains information about the diff being reviewed
 type DiffInfo struct {
-	Range      string // e.g., "main..feature-branch" or "HEAD~3..HEAD"
-	FromCommit string // Starting commit SHA
-	ToCommit   string // Ending commit SHA
+	Range       string // e.g., "main..feature-branch" or "HEAD~3..HEAD"
+	FromCommit  string // Starting commit SHA
+	ToCommit    string // Ending commit SHA
+	ProjectName string // Project name
 }
 
 // htmlData holds all data for HTML template rendering
 type suggestionHTML struct {
 	Heading     string
 	Description string
+}
+
+type samplingInfoHTML struct {
+	TotalFiles      int
+	ReviewedCount   int
+	IgnoredCount    int
+	ReviewedFiles   []string
+	IgnoredFiles    []ignoredFileHTML
+	FilteredReasons map[string]int
+}
+
+type ignoredFileHTML struct {
+	Path       string
+	Reason     string
+	ReasonLabel string
 }
 
 type htmlData struct {
@@ -422,6 +498,7 @@ type htmlData struct {
 	StaticAnalysisByCategory []staticAnalysisCategoryHTML
 	Suggestions        []suggestionHTML
 	DiffInfo           *DiffInfo
+	SamplingInfo       *samplingInfoHTML
 }
 
 type tokenUsageHTML struct {
@@ -687,7 +764,54 @@ func (f *Formatter) prepareHTMLData(report *ReviewReport, fileContents map[strin
 		})
 	}
 
+	// Sampling info
+	if report.SamplingInfo != nil {
+		ignoredFilesHTML := make([]ignoredFileHTML, 0, len(report.SamplingInfo.IgnoredFiles))
+		for _, ignored := range report.SamplingInfo.IgnoredFiles {
+			reasonLabel := f.formatIgnoreReason(ignored.Reason)
+			ignoredFilesHTML = append(ignoredFilesHTML, ignoredFileHTML{
+				Path:       ignored.Path,
+				Reason:     ignored.Reason,
+				ReasonLabel: reasonLabel,
+			})
+		}
+		
+		data.SamplingInfo = &samplingInfoHTML{
+			TotalFiles:      report.SamplingInfo.TotalFiles,
+			ReviewedCount:   len(report.SamplingInfo.ReviewedFiles),
+			IgnoredCount:    len(report.SamplingInfo.IgnoredFiles),
+			ReviewedFiles:   report.SamplingInfo.ReviewedFiles,
+			IgnoredFiles:    ignoredFilesHTML,
+			FilteredReasons: report.SamplingInfo.FilteredReasons,
+		}
+	}
+
 	return data
+}
+
+// formatIgnoreReason formats the ignore reason for display
+func (f *Formatter) formatIgnoreReason(reason string) string {
+	reasonMap := map[string]string{
+		"no_changes":    "No Changes",
+		"hidden":        "Hidden File",
+		"generated":     "Generated",
+		"lock_file":     "Lock File",
+		"binary":        "Binary File",
+		"test":          "Test File",
+		"low_priority":  "Low Priority",
+	}
+	
+	if label, ok := reasonMap[reason]; ok {
+		return label
+	}
+	// Capitalize first letter and replace underscores
+	parts := strings.Split(strings.ReplaceAll(reason, "_", " "), " ")
+	for i, part := range parts {
+		if len(part) > 0 {
+			parts[i] = strings.ToUpper(part[:1]) + strings.ToLower(part[1:])
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 // Helper functions

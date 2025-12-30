@@ -25,6 +25,12 @@ type ReviewEngine struct {
 	diffRange   string // Stores the diff range for HTML report
 }
 
+// LineRange represents a range of line numbers
+type LineRange struct {
+	Start int
+	End   int
+}
+
 // NewEngine creates a new ReviewEngine
 func NewEngine(cfg *config.Config, reviewer *Reviewer) (*ReviewEngine, error) {
 	// Get project name from config or extract from Git
@@ -263,9 +269,12 @@ func (e *ReviewEngine) Review(diff *git.Diff, diffRange ...string) (*ReviewRepor
 	}
 	report := e.synthesizer.Synthesize(filteredLLMOutput, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage)
 
+	// 7.5. Populate sampling information
+	e.populateSamplingInfo(report, diff, sampledDiff, samplingReport)
+
 	// 8. Populate duplicate blocks and AI patterns for HTML report
 	e.populateDuplicateBlocks(report, exactDupDetector, localResult, diff)
-	e.populateAIPatterns(report, localResult)
+	e.populateAIPatterns(report, localResult, diff)
 
 	// 9. Generate HTML report if enabled
 	if e.shouldGenerateHTML() {
@@ -520,19 +529,212 @@ func (e *ReviewEngine) populateDuplicateBlocks(report *ReviewReport, exactDupDet
 	}
 }
 
-// populateAIPatterns extracts AI patterns from file analysis
-func (e *ReviewEngine) populateAIPatterns(report *ReviewReport, localResult *ReviewResult) {
+// populateAIPatterns extracts AI patterns from file analysis, filtering to only changed code
+func (e *ReviewEngine) populateAIPatterns(report *ReviewReport, localResult *ReviewResult, diff *git.Diff) {
 	if report.AIPatterns == nil {
 		report.AIPatterns = make(map[string][]analysis.AICodePattern)
 	}
 
+	// Extract changed line ranges from diff
+	changedRanges := e.extractChangedLineRanges(diff)
+
 	aiDetector := analysis.NewAICodeDetector()
 	for filePath, fileAnalysis := range localResult.FileAnalysis {
-		patterns := aiDetector.DetectAIPatterns(fileAnalysis)
-		if len(patterns) > 0 {
-			report.AIPatterns[filePath] = patterns
+		// Get all AI patterns for this file
+		allPatterns := aiDetector.DetectAIPatterns(fileAnalysis)
+		
+		// Filter patterns to only include those in changed code sections
+		filteredPatterns := make([]analysis.AICodePattern, 0)
+		fileRanges, hasChanges := changedRanges[filePath]
+		
+		// Find the diff file to check its status
+		var diffFile *git.DiffFile
+		for _, df := range diff.Files {
+			if df.Path == filePath {
+				diffFile = df
+				break
+			}
+		}
+		
+		// Handle edge cases
+		if diffFile != nil {
+			if diffFile.Status == "D" {
+				// Deleted file - skip AI analysis
+				continue
+			}
+			if diffFile.Status == "A" {
+				// New file - all lines are changed, include all patterns
+				filteredPatterns = allPatterns
+			} else if hasChanges {
+				// Modified file - only include patterns in changed sections
+				for _, pattern := range allPatterns {
+					if e.isPatternInChangedRange(pattern.StartLine, pattern.EndLine, fileRanges) {
+						filteredPatterns = append(filteredPatterns, pattern)
+					}
+				}
+			}
+		} else if hasChanges {
+			// File exists but not in diff (shouldn't happen, but handle gracefully)
+			for _, pattern := range allPatterns {
+				if e.isPatternInChangedRange(pattern.StartLine, pattern.EndLine, fileRanges) {
+					filteredPatterns = append(filteredPatterns, pattern)
+				}
+			}
+		}
+		
+		if len(filteredPatterns) > 0 {
+			report.AIPatterns[filePath] = filteredPatterns
 		}
 	}
+}
+
+// extractChangedLineRanges parses git diff patches to extract changed line ranges
+func (e *ReviewEngine) extractChangedLineRanges(diff *git.Diff) map[string][]LineRange {
+	changedRanges := make(map[string][]LineRange)
+	
+	for _, file := range diff.Files {
+		if file.Patch == "" {
+			continue
+		}
+		
+		ranges := make([]LineRange, 0)
+		lines := strings.Split(file.Patch, "\n")
+		currentNewLine := 0
+		inChangedBlock := false
+		blockStart := 0
+		
+		for _, line := range lines {
+			// Parse @@ header to track line numbers
+			// Format: @@ -old_start,old_count +new_start,new_count @@
+			if strings.HasPrefix(line, "@@") {
+				// Extract new file line number
+				re := regexp.MustCompile(`\+(\d+)`)
+				if match := re.FindStringSubmatch(line); len(match) > 1 {
+					fmt.Sscanf(match[1], "%d", &currentNewLine)
+					// Close previous block if open
+					if inChangedBlock {
+						ranges = append(ranges, LineRange{Start: blockStart, End: currentNewLine - 1})
+						inChangedBlock = false
+					}
+				}
+				continue
+			}
+			
+			// Skip file header lines
+			if strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---") {
+				continue
+			}
+			
+			// Track added/modified lines (lines starting with +)
+			if strings.HasPrefix(line, "+") {
+				if !inChangedBlock {
+					// Start of a new changed block
+					blockStart = currentNewLine
+					inChangedBlock = true
+				}
+				currentNewLine++
+			} else if strings.HasPrefix(line, "-") {
+				// Removed line - don't increment current line in new file
+				// Close block if we were tracking changes
+				if inChangedBlock {
+					ranges = append(ranges, LineRange{Start: blockStart, End: currentNewLine - 1})
+					inChangedBlock = false
+				}
+			} else if strings.HasPrefix(line, "\\") {
+				// Continuation marker (for binary files or no newline at EOF)
+				// Don't increment line number
+				continue
+			} else {
+				// Context line (unchanged)
+				if inChangedBlock {
+					// End of changed block
+					ranges = append(ranges, LineRange{Start: blockStart, End: currentNewLine - 1})
+					inChangedBlock = false
+				}
+				currentNewLine++
+			}
+		}
+		
+		// Close any open block at the end
+		if inChangedBlock {
+			ranges = append(ranges, LineRange{Start: blockStart, End: currentNewLine - 1})
+		}
+		
+		if len(ranges) > 0 {
+			changedRanges[file.Path] = ranges
+		}
+	}
+	
+	return changedRanges
+}
+
+// isPatternInChangedRange checks if a pattern's line range overlaps with any changed range
+func (e *ReviewEngine) isPatternInChangedRange(patternStart, patternEnd int, changedRanges []LineRange) bool {
+	for _, r := range changedRanges {
+		// Overlap logic: pattern overlaps if patternStart <= rangeEnd && patternEnd >= rangeStart
+		if patternStart <= r.End && patternEnd >= r.Start {
+			return true
+		}
+	}
+	return false
+}
+
+// populateSamplingInfo populates sampling information in the report
+func (e *ReviewEngine) populateSamplingInfo(report *ReviewReport, diff *git.Diff, sampledDiff *SampledDiff, samplingReport *SamplingReport) {
+	// Create a map of reviewed file paths
+	reviewedFiles := make(map[string]bool)
+	for _, sampledFile := range sampledDiff.Files {
+		reviewedFiles[sampledFile.Path] = true
+	}
+
+	// Determine which files were reviewed and which were ignored
+	reviewedPaths := make([]string, 0)
+	ignoredFiles := make([]IgnoredFile, 0)
+
+	for _, file := range diff.Files {
+		if reviewedFiles[file.Path] {
+			reviewedPaths = append(reviewedPaths, file.Path)
+		} else {
+			// Determine why this file was ignored
+			reason := e.determineIgnoreReason(file)
+			ignoredFiles = append(ignoredFiles, IgnoredFile{
+				Path:   file.Path,
+				Reason: reason,
+			})
+		}
+	}
+
+	report.SamplingInfo = &SamplingInfo{
+		TotalFiles:      samplingReport.TotalFiles,
+		ReviewedFiles:   reviewedPaths,
+		IgnoredFiles:    ignoredFiles,
+		FilteredReasons: samplingReport.FilteredReasons,
+	}
+}
+
+// determineIgnoreReason determines why a file was ignored during sampling
+func (e *ReviewEngine) determineIgnoreReason(file *git.DiffFile) string {
+	// Check various filter criteria
+	if file.Additions == 0 && file.Deletions == 0 {
+		return "no_changes"
+	}
+	if strings.HasPrefix(file.Path, ".") || strings.Contains(file.Path, "/.") {
+		return "hidden"
+	}
+	if isGeneratedFile(file.Path) {
+		return "generated"
+	}
+	if isLockFile(file.Path) {
+		return "lock_file"
+	}
+	if isBinaryFile(file.Path) {
+		return "binary"
+	}
+	if isTestFile(file.Path) {
+		return "test"
+	}
+	// If none of the above, it was likely filtered due to token budget or low risk score
+	return "low_priority"
 }
 
 // shouldGenerateHTML checks if HTML generation should be enabled
@@ -563,6 +765,19 @@ func (e *ReviewEngine) generateHTMLReport(report *ReviewReport, diff *git.Diff, 
 
 	// Extract diff information
 	diffInfo := &DiffInfo{}
+	
+	// Get project name
+	projectName, err := e.config.GetProjectName()
+	if err != nil {
+		// Try to extract from Git repository
+		if repo != nil {
+			if name, repoErr := repo.GetProjectName(); repoErr == nil {
+				projectName = name
+			}
+		}
+	}
+	diffInfo.ProjectName = projectName
+	
 	if diffRange != "" {
 		diffInfo.Range = diffRange
 		// Extract commit SHAs from range (e.g., "main..feature" -> get SHAs for both)

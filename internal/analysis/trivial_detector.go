@@ -167,3 +167,4 @@ func (d *TrivialPatternDetector) isConstructor(fn FunctionInfo) bool {
 
 
 
+

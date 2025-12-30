@@ -67,3 +67,4 @@ func (fr *FileReader) ClearCache() {
 	fr.cache = make(map[string]string)
 }
 
+
