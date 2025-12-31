@@ -20,6 +20,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.tag }}
+          path: source-repo
 
       - name: Setup GitHub CLI
         run: |
@@ -187,14 +188,15 @@ jobs:
           TARGET_OWNER: ${{ secrets.SYNC_REPO_OWNER }}
           TARGET_REPO: ${{ secrets.SYNC_REPO_NAME }}
         run: |
-          if [ ! -f "USAGE.md" ]; then
-            echo "Warning: USAGE.md not found in repository root"
+          if [ ! -f "source-repo/USAGE.md" ]; then
+            echo "Warning: USAGE.md not found in source repository"
             exit 0
           fi
           
           echo "Pushing USAGE.md to $TARGET_OWNER/$TARGET_REPO main branch..."
           
-          # Clone the target repository
+          # Clone the target repository (katichai-dist)
+          echo "Cloning target repository $TARGET_OWNER/$TARGET_REPO..."
           git clone "https://$GH_TOKEN@github.com/$TARGET_OWNER/$TARGET_REPO.git" target-repo
           cd target-repo
           
@@ -203,20 +205,29 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
           # Ensure we're on main branch
+          echo "Checking out main branch..."
           git checkout main || git checkout -b main
           
-          # Copy USAGE.md
-          cp ../USAGE.md .
+          # Show current branch and remote
+          echo "Current branch: $(git branch --show-current)"
+          echo "Remote URL: $(git remote get-url origin)"
+          
+          # Copy USAGE.md from source repo
+          echo "Copying USAGE.md from source repository..."
+          cp ../source-repo/USAGE.md .
           
           # Check if there are changes
+          echo "Checking for changes..."
           if git diff --quiet USAGE.md; then
             echo "No changes to USAGE.md"
           else
             echo "Changes detected, committing..."
             git add USAGE.md
-            git commit -m "Update USAGE.md from release ${{ steps.tag.outputs.tag }}" || echo "No changes to commit"
+            git status
+            git commit -m "Update USAGE.md from release ${{ steps.tag.outputs.tag }}"
+            echo "Pushing to $TARGET_OWNER/$TARGET_REPO main branch..."
             git push "https://$GH_TOKEN@github.com/$TARGET_OWNER/$TARGET_REPO.git" main
-            echo "✅ USAGE.md pushed to main branch"
+            echo "✅ USAGE.md pushed to $TARGET_OWNER/$TARGET_REPO main branch"
           fi
           
           cd ..
