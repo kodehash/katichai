@@ -43,14 +43,14 @@ Download the latest release for your platform:
 
 **macOS (Intel)**
 ```bash
-curl -L https://github.com/kodehash/katichai/releases/latest/download/katich_darwin_amd64.tar.gz -o katich.tar.gz
+curl -L https://github.com/kodehash/katichai-dist/releases/latest/download/katich_darwin_amd64.tar.gz -o katich.tar.gz
 tar -xzf katich.tar.gz
 sudo mv katich /usr/local/bin/
 ```
 
 **macOS (Apple Silicon)**
 ```bash
-curl -L https://github.com/kodehash/katichai/releases/latest/download/katich_darwin_arm64.tar.gz -o katich.tar.gz
+curl -L https://github.com/kodehash/katichai-dist/releases/latest/download/katich_darwin_arm64.tar.gz -o katich.tar.gz
 tar -xzf katich.tar.gz
 sudo mv katich /usr/local/bin/
 ```
@@ -62,7 +62,7 @@ xattr -d com.apple.quarantine /usr/local/bin/katich
 
 **Linux**
 ```bash
-curl -L https://github.com/kodehash/katichai/releases/latest/download/katich_linux_amd64.tar.gz -o katich.tar.gz
+curl -L https://github.com/kodehash/katichai-dist/releases/latest/download/katich_linux_amd64.tar.gz -o katich.tar.gz
 tar -xzf katich.tar.gz
 sudo mv katich /usr/local/bin/
 ```
