@@ -202,16 +202,20 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
+          # Ensure we're on main branch
+          git checkout main || git checkout -b main
+          
           # Copy USAGE.md
           cp ../USAGE.md .
           
-          # Commit and push if there are changes
-          if git diff --quiet; then
+          # Check if there are changes
+          if git diff --quiet USAGE.md; then
             echo "No changes to USAGE.md"
           else
+            echo "Changes detected, committing..."
             git add USAGE.md
-            git commit -m "Update USAGE.md from release ${{ steps.tag.outputs.tag }}"
-            git push origin main
+            git commit -m "Update USAGE.md from release ${{ steps.tag.outputs.tag }}" || echo "No changes to commit"
+            git push "https://$GH_TOKEN@github.com/$TARGET_OWNER/$TARGET_REPO.git" main
             echo "✅ USAGE.md pushed to main branch"
           fi
           
