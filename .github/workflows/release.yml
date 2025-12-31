@@ -59,11 +59,17 @@ jobs:
       - name: Extract tag name
         id: tag
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ github.event.inputs.tag }}" ]; then
             TAG="${{ github.event.inputs.tag }}"
           else
             TAG=${GITHUB_REF#refs/tags/}
           fi
+          
+          if [ -z "$TAG" ]; then
+            echo "Error: Could not extract tag name"
+            exit 1
+          fi
+          
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "Extracted tag: $TAG"
 
@@ -73,10 +79,23 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
+          
+          # Get release information
           RELEASE_INFO=$(gh release view "$TAG" --repo ${{ github.repository }} --json name,body,isPrerelease)
-          TITLE=$(echo "$RELEASE_INFO" | jq -r '.name')
-          NOTES=$(echo "$RELEASE_INFO" | jq -r '.body')
-          IS_PRERELEASE=$(echo "$RELEASE_INFO" | jq -r '.isPrerelease')
+          
+          if [ -z "$RELEASE_INFO" ] || [ "$RELEASE_INFO" == "null" ]; then
+            echo "Error: Could not fetch release information for tag $TAG"
+            exit 1
+          fi
+          
+          TITLE=$(echo "$RELEASE_INFO" | jq -r '.name // ""')
+          NOTES=$(echo "$RELEASE_INFO" | jq -r '.body // ""')
+          IS_PRERELEASE=$(echo "$RELEASE_INFO" | jq -r '.isPrerelease // false')
+          
+          # Use tag as fallback title if name is empty
+          if [ -z "$TITLE" ]; then
+            TITLE="$TAG"
+          fi
           
           echo "title<<EOF" >> $GITHUB_OUTPUT
           echo "$TITLE" >> $GITHUB_OUTPUT
@@ -96,9 +115,16 @@ jobs:
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
           mkdir -p ./artifacts
+          
+          echo "Downloading assets for tag $TAG from ${{ github.repository }}..."
           gh release download "$TAG" --repo ${{ github.repository }} -D ./artifacts
-          echo "Downloaded assets:"
-          ls -lh ./artifacts/
+          
+          if [ ! "$(ls -A ./artifacts)" ]; then
+            echo "Warning: No assets found in release $TAG"
+          else
+            echo "Downloaded assets:"
+            ls -lh ./artifacts/
+          fi
 
       - name: Create release in target repository
         env:
@@ -113,17 +139,16 @@ jobs:
           
           echo "Creating release $TAG in $TARGET_OWNER/$TARGET_REPO"
           
-          gh release create "$TAG" \
-            --repo "$TARGET_OWNER/$TARGET_REPO" \
-            --title "$TITLE" \
-            --notes "$NOTES" \
-            --prerelease="$IS_PRERELEASE" || {
-            if [ $? -eq 1 ]; then
-              echo "Release already exists, continuing to upload assets..."
-            else
-              exit 1
-            fi
-          }
+          # Check if release already exists
+          if gh release view "$TAG" --repo "$TARGET_OWNER/$TARGET_REPO" &>/dev/null; then
+            echo "Release $TAG already exists, skipping creation..."
+          else
+            gh release create "$TAG" \
+              --repo "$TARGET_OWNER/$TARGET_REPO" \
+              --title "$TITLE" \
+              --notes "$NOTES" \
+              --prerelease="$IS_PRERELEASE"
+          fi
 
       - name: Upload binaries and checksums to target release
         env:
@@ -135,13 +160,27 @@ jobs:
           
           echo "Uploading artifacts to $TARGET_OWNER/$TARGET_REPO..."
           
+          # Check if artifacts directory exists and has files
+          if [ ! -d "./artifacts" ] || [ -z "$(ls -A ./artifacts)" ]; then
+            echo "No artifacts to upload"
+            exit 0
+          fi
+          
           # Upload all artifacts (binaries and checksums)
+          UPLOAD_COUNT=0
           for file in ./artifacts/*; do
             if [ -f "$file" ]; then
               echo "Uploading $(basename $file)..."
-              gh release upload "$TAG" "$file" --repo "$TARGET_OWNER/$TARGET_REPO" --clobber || true
+              if gh release upload "$TAG" "$file" --repo "$TARGET_OWNER/$TARGET_REPO" --clobber; then
+                UPLOAD_COUNT=$((UPLOAD_COUNT + 1))
+                echo "✅ Successfully uploaded $(basename $file)"
+              else
+                echo "⚠️  Failed to upload $(basename $file)"
+              fi
             fi
           done
+          
+          echo "Uploaded $UPLOAD_COUNT file(s)"
 
       - name: Upload USAGE.md to target release
         env:
