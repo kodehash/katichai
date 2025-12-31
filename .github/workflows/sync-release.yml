@@ -120,7 +120,7 @@ jobs:
           echo "Creating release $TAG in $TARGET_OWNER/$TARGET_REPO"
           
           # Authenticate GitHub CLI explicitly
-          echo "$GH_TOKEN" | gh auth login --with-token
+          echo "$GH_TOKEN" | gh auth login --with-token 2>/dev/null || true
           
           # Check if release already exists
           if gh release view "$TAG" --repo "$TARGET_OWNER/$TARGET_REPO" &>/dev/null; then
@@ -141,7 +141,7 @@ jobs:
           TARGET_REPO: ${{ secrets.SYNC_REPO_NAME }}
         run: |
           # Authenticate GitHub CLI explicitly
-          echo "$GH_TOKEN" | gh auth login --with-token
+          echo "$GH_TOKEN" | gh auth login --with-token 2>/dev/null || true
           
           TAG="${{ steps.tag.outputs.tag }}"
           
@@ -177,7 +177,7 @@ jobs:
           TARGET_REPO: ${{ secrets.SYNC_REPO_NAME }}
         run: |
           # Authenticate GitHub CLI explicitly
-          echo "$GH_TOKEN" | gh auth login --with-token
+          echo "$GH_TOKEN" | gh auth login --with-token 2>/dev/null || true
           
           TAG="${{ steps.tag.outputs.tag }}"
           
@@ -196,7 +196,7 @@ jobs:
           TARGET_REPO: ${{ secrets.SYNC_REPO_NAME }}
         run: |
           # Authenticate GitHub CLI explicitly
-          echo "$GH_TOKEN" | gh auth login --with-token
+          echo "$GH_TOKEN" | gh auth login --with-token 2>/dev/null || true
           
           TAG="${{ steps.tag.outputs.tag }}"
           echo "Verifying release $TAG in $TARGET_OWNER/$TARGET_REPO..."
