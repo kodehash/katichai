@@ -73,8 +73,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
-          RELEASE_INFO=$(gh release view "$TAG" --repo ${{ github.repository }} --json title,body,isPrerelease)
-          TITLE=$(echo "$RELEASE_INFO" | jq -r '.title')
+          RELEASE_INFO=$(gh release view "$TAG" --repo ${{ github.repository }} --json name,body,isPrerelease)
+          TITLE=$(echo "$RELEASE_INFO" | jq -r '.name')
           NOTES=$(echo "$RELEASE_INFO" | jq -r '.body')
           IS_PRERELEASE=$(echo "$RELEASE_INFO" | jq -r '.isPrerelease')
           
