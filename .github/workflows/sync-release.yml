@@ -180,24 +180,43 @@ jobs:
           
           echo "Uploaded $UPLOAD_COUNT file(s)"
 
-      - name: Upload USAGE.md to target release
+      - name: Push USAGE.md to target repository main branch
         env:
           GH_TOKEN: ${{ secrets.SYNC_REPO_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.SYNC_REPO_TOKEN }}
           TARGET_OWNER: ${{ secrets.SYNC_REPO_OWNER }}
           TARGET_REPO: ${{ secrets.SYNC_REPO_NAME }}
         run: |
-          # Authenticate GitHub CLI explicitly
-          echo "$GH_TOKEN" | gh auth login --with-token 2>/dev/null || true
-          
-          TAG="${{ steps.tag.outputs.tag }}"
-          
-          if [ -f "USAGE.md" ]; then
-            echo "Uploading USAGE.md..."
-            gh release upload "$TAG" USAGE.md --repo "$TARGET_OWNER/$TARGET_REPO" --clobber || true
-          else
+          if [ ! -f "USAGE.md" ]; then
             echo "Warning: USAGE.md not found in repository root"
+            exit 0
           fi
+          
+          echo "Pushing USAGE.md to $TARGET_OWNER/$TARGET_REPO main branch..."
+          
+          # Clone the target repository
+          git clone "https://$GH_TOKEN@github.com/$TARGET_OWNER/$TARGET_REPO.git" target-repo
+          cd target-repo
+          
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Copy USAGE.md
+          cp ../USAGE.md .
+          
+          # Commit and push if there are changes
+          if git diff --quiet; then
+            echo "No changes to USAGE.md"
+          else
+            git add USAGE.md
+            git commit -m "Update USAGE.md from release ${{ steps.tag.outputs.tag }}"
+            git push origin main
+            echo "✅ USAGE.md pushed to main branch"
+          fi
+          
+          cd ..
+          rm -rf target-repo
 
       - name: Verify release
         env:
