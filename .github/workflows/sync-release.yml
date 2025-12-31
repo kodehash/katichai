@@ -85,9 +85,15 @@ jobs:
           mkdir -p ./artifacts
           
           echo "Downloading assets for tag $TAG from ${{ github.repository }}..."
-          gh release download "$TAG" --repo ${{ github.repository }} -D ./artifacts
           
-          if [ ! "$(ls -A ./artifacts)" ]; then
+          # Try to download assets, but don't fail if there are none
+          if gh release download "$TAG" --repo ${{ github.repository }} -D ./artifacts 2>&1; then
+            echo "Assets downloaded successfully"
+          else
+            echo "Warning: Failed to download assets or no assets found in release $TAG"
+          fi
+          
+          if [ ! "$(ls -A ./artifacts 2>/dev/null)" ]; then
             echo "Warning: No assets found in release $TAG"
           else
             echo "Downloaded assets:"
@@ -126,11 +132,16 @@ jobs:
           if gh release view "$TAG" --repo "$TARGET_OWNER/$TARGET_REPO" &>/dev/null; then
             echo "Release $TAG already exists, skipping creation..."
           else
-            gh release create "$TAG" \
+            echo "Creating new release..."
+            if ! gh release create "$TAG" \
               --repo "$TARGET_OWNER/$TARGET_REPO" \
               --title "$TITLE" \
               --notes "$NOTES" \
-              --prerelease="$IS_PRERELEASE"
+              --prerelease="$IS_PRERELEASE"; then
+              echo "Error: Failed to create release $TAG in $TARGET_OWNER/$TARGET_REPO"
+              exit 1
+            fi
+            echo "Release created successfully"
           fi
 
       - name: Upload binaries and checksums to target release
@@ -200,5 +211,10 @@ jobs:
           
           TAG="${{ steps.tag.outputs.tag }}"
           echo "Verifying release $TAG in $TARGET_OWNER/$TARGET_REPO..."
-          gh release view "$TAG" --repo "$TARGET_OWNER/$TARGET_REPO"
-          echo "✅ Release synced successfully!"
+          
+          if gh release view "$TAG" --repo "$TARGET_OWNER/$TARGET_REPO"; then
+            echo "✅ Release synced successfully!"
+          else
+            echo "Error: Failed to verify release $TAG in $TARGET_OWNER/$TARGET_REPO"
+            exit 1
+          fi
