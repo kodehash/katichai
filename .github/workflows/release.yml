@@ -135,12 +135,26 @@ jobs:
           TARGET_OWNER: ${{ secrets.SYNC_REPO_OWNER }}
           TARGET_REPO: ${{ secrets.SYNC_REPO_NAME }}
         run: |
+          # Validate required environment variables
+          if [ -z "$GH_TOKEN" ]; then
+            echo "Error: GH_TOKEN is not set. Please configure SYNC_REPO_TOKEN secret."
+            exit 1
+          fi
+          
+          if [ -z "$TARGET_OWNER" ] || [ -z "$TARGET_REPO" ]; then
+            echo "Error: TARGET_OWNER or TARGET_REPO is not set. Please configure secrets."
+            exit 1
+          fi
+          
           TAG="${{ steps.tag.outputs.tag }}"
           TITLE="${{ steps.release-info.outputs.title }}"
           NOTES="${{ steps.release-info.outputs.notes }}"
           IS_PRERELEASE="${{ steps.release-info.outputs.is_prerelease }}"
           
           echo "Creating release $TAG in $TARGET_OWNER/$TARGET_REPO"
+          
+          # Authenticate GitHub CLI explicitly
+          echo "$GH_TOKEN" | gh auth login --with-token
           
           # Check if release already exists
           if gh release view "$TAG" --repo "$TARGET_OWNER/$TARGET_REPO" &>/dev/null; then
@@ -160,6 +174,9 @@ jobs:
           TARGET_OWNER: ${{ secrets.SYNC_REPO_OWNER }}
           TARGET_REPO: ${{ secrets.SYNC_REPO_NAME }}
         run: |
+          # Authenticate GitHub CLI explicitly
+          echo "$GH_TOKEN" | gh auth login --with-token
+          
           TAG="${{ steps.tag.outputs.tag }}"
           
           echo "Uploading artifacts to $TARGET_OWNER/$TARGET_REPO..."
@@ -193,6 +210,9 @@ jobs:
           TARGET_OWNER: ${{ secrets.SYNC_REPO_OWNER }}
           TARGET_REPO: ${{ secrets.SYNC_REPO_NAME }}
         run: |
+          # Authenticate GitHub CLI explicitly
+          echo "$GH_TOKEN" | gh auth login --with-token
+          
           TAG="${{ steps.tag.outputs.tag }}"
           
           if [ -f "USAGE.md" ]; then
@@ -209,6 +229,9 @@ jobs:
           TARGET_OWNER: ${{ secrets.SYNC_REPO_OWNER }}
           TARGET_REPO: ${{ secrets.SYNC_REPO_NAME }}
         run: |
+          # Authenticate GitHub CLI explicitly
+          echo "$GH_TOKEN" | gh auth login --with-token
+          
           TAG="${{ steps.tag.outputs.tag }}"
           echo "Verifying release $TAG in $TARGET_OWNER/$TARGET_REPO..."
           gh release view "$TAG" --repo "$TARGET_OWNER/$TARGET_REPO"
