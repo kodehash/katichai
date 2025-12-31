@@ -91,7 +91,7 @@ func DefaultConfig() *Config {
 			IgnoreTrivialPatterns: true,
 			Sampling: SamplingConfig{
 				Enabled:        true,
-				MaxFiles:       20,
+				MaxFiles:       50,
 				ContextLines:   2,
 				SkipGenerated:  true,
 				SkipTests:      false,

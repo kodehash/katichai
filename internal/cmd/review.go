@@ -16,7 +16,20 @@ var reviewCmd = &cobra.Command{
 	Use:   "review",
 	Short: "Review code changes using AI-assisted analysis",
 	Long: `Analyze git diffs, detect AI-generated code, find duplicates,
-and provide architecture-aware code reviews.`,
+and provide architecture-aware code reviews.
+
+Available commands:
+  latest    Review the latest commit
+  diff      Review a specific commit range (e.g., main..feature)
+  file      Review a specific file
+  full      Review the entire repository (all tracked files)
+
+Examples:
+  katich review latest
+  katich review diff HEAD~3..HEAD
+  katich review diff main..feature-branch
+  katich review file path/to/file.go
+  katich review full`,
 }
 
 var (
@@ -32,6 +45,7 @@ func init() {
 	reviewCmd.AddCommand(reviewLatestCmd)
 	reviewCmd.AddCommand(reviewDiffCmd)
 	reviewCmd.AddCommand(reviewFileCmd)
+	reviewCmd.AddCommand(reviewFullCmd)
 
 	// Global review flags
 	reviewCmd.PersistentFlags().BoolVar(&ciMode, "ci", false, "CI mode (exit with error code on issues)")
@@ -74,6 +88,31 @@ var reviewFileCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runReviewFile(args[0])
+	},
+}
+
+// reviewFullCmd reviews the entire repository
+var reviewFullCmd = &cobra.Command{
+	Use:   "full",
+	Short: "Review the entire repository",
+	Long: `Perform a comprehensive review of all tracked files in the repository.
+
+This command reviews the entire codebase (not just diffs) and provides extensive
+coverage of architecture, security, code quality, and patterns across the repository.
+Uses intelligent sampling to handle large repositories efficiently.
+
+The review includes:
+  - Full codebase analysis with intelligent file sampling (up to 100 files)
+  - Architecture and design pattern review
+  - Security vulnerability scanning
+  - Code quality and maintainability assessment
+  - Duplicate code detection
+  - AI-generated code detection
+
+Example:
+  katich review full`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runReviewFull()
 	},
 }
 
@@ -299,6 +338,93 @@ func runReviewDiff(diffRange string) error {
 
 		return nil
 	}
+
+func runReviewFull() error {
+	// Check if katich is initialized
+	if err := checkKatichInitialized(); err != nil {
+		return err
+	}
+	
+	// Print ASCII banner
+	printASCIIBanner()
+	
+	fmt.Println("🔍 Reviewing entire repository...")
+	
+	// Find Git repository
+	repo, err := git.FindRepository()
+	if err != nil {
+		return fmt.Errorf("failed to find Git repository: %w", err)
+	}
+
+	if verbose {
+		fmt.Printf("Repository: %s\n", repo.RootPath)
+	}
+
+	// Load config
+	cfg, err := config.Load(GetConfig())
+	if err != nil {
+		cfg = config.DefaultConfig()
+	}
+
+	// Override HTML generation if flag is set
+	if generateHTML {
+		cfg.Review.GenerateHTML = true
+	}
+
+	// Initialize legacy reviewer (used by Engine)
+	baseReviewer := review.NewReviewer(repo.RootPath, cfg)
+	
+	// Initialize Review Engine
+	engine, err := review.NewEngine(cfg, baseReviewer)
+	if err != nil {
+		return fmt.Errorf("failed to initialize review engine: %w", err)
+	}
+
+	// Get full repository diff
+	diff, err := repo.GetFullRepositoryDiff()
+	if err != nil {
+		return fmt.Errorf("failed to get repository files: %w", err)
+	}
+
+	// Run comprehensive full repository review
+	fmt.Println("🤖 Analyzing entire codebase with AI...")
+	report, err := engine.ReviewFullRepository(diff)
+	if err != nil {
+		return fmt.Errorf("review failed: %w", err)
+	}
+
+	// Output Result
+	formatter := review.NewFormatter()
+	var output string
+	
+	switch outputFormat {
+	case "json":
+		output = formatter.FormatJSON(report)
+	case "markdown":
+		output = formatter.FormatMarkdown(report)
+	case "terminal":
+		fallthrough
+	default:
+		output = formatter.FormatText(report)
+	}
+
+	// Print or Write to file
+	if outputFile != "" {
+		if err := writeToFile(outputFile, output); err != nil {
+			return err
+		}
+		fmt.Printf("✅ Report saved to %s\n", outputFile)
+	} else {
+		fmt.Println(output)
+	}
+
+	// Verify status for CI/CD (commented out - scoring is subjective)
+	// if ciMode && report.Status == "FAIL" {
+	// 	return fmt.Errorf("review failed with score %d", report.Score)
+	// }
+
+	return nil
+}
 
 	func runReviewFile(filePath string) error {
 	// Check if katich is initialized

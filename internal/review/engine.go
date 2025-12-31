@@ -241,7 +241,7 @@ func (e *ReviewEngine) Review(diff *git.Diff, diffRange ...string) (*ReviewRepor
 	}
 
 	// 5. Generate Prompt
-	prompt := e.pmtBuilder.BuildReviewPrompt(reviewCtx)
+	prompt := e.pmtBuilder.BuildReviewPrompt(reviewCtx, false) // false = diff-based review
 	
 	// 5. Query LLM
 	// We'll use a large context window for the review
@@ -252,7 +252,7 @@ func (e *ReviewEngine) Review(diff *git.Diff, diffRange ...string) (*ReviewRepor
 			{Role: llm.RoleUser, Content: prompt},
 		},
 		Temperature: 0.2, // Low temp for more analytical output
-		MaxTokens:   4096,
+		MaxTokens:   8192, // Increased from 4096 to allow longer responses
 	})
 	if err != nil {
 		return nil, fmt.Errorf("LLM review failed: %w", err)
@@ -285,6 +285,194 @@ func (e *ReviewEngine) Review(diff *git.Diff, diffRange ...string) (*ReviewRepor
 	}
 
 	return report, nil
+}
+
+// ReviewFullRepository performs a comprehensive review of the entire repository
+// This is different from Review() which reviews diffs - this reviews all tracked files
+func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, error) {
+	// Set diff range to indicate full repository review
+	e.diffRange = "full repository"
+
+	// 1. Run Local Analysis (Static + Similarity)
+	localResult, err := e.reviewer.ReviewDiff(diff)
+	if err != nil {
+		return nil, fmt.Errorf("local analysis failed: %w", err)
+	}
+
+	// 1.5 Run Classifier (optional for full repo, but useful for context)
+	classifier := llm.NewClassifier(e.llmClient)
+	diffStr := formatDiff(diff)
+	
+	// Truncate diff for classifier if too large
+	classifyDiff := diffStr
+	if len(classifyDiff) > 2000 {
+		classifyDiff = classifyDiff[:2000] + "\n... (truncated)"
+	}
+	
+	classification, err := classifier.ClassifyChanges(context.Background(), classifyDiff)
+	if err != nil {
+		fmt.Printf("Warning: Classification failed: %v\n", err)
+		classification = llm.ClassificationResult{Type: llm.ClassUnknown}
+	}
+
+	// 2. Extract Static Issues and Duplicates
+	staticIssues := make([]analysis.Issue, 0)
+	duplicateWarnings := make([]string, 0)
+
+	// Initialize detectors
+	exactDupDetector := analysis.NewExactDuplicationDetector()
+
+	for path, fileAnalysis := range localResult.FileAnalysis {
+		// Add functions for exact duplication detection
+		for _, fn := range fileAnalysis.Functions {
+			if fn.Body != "" {
+				exactDupDetector.AddFunction(path, fn)
+			}
+		}
+
+		// Collect static issues
+		for _, issue := range fileAnalysis.Issues {
+			if issue.File == "" {
+				issue.File = path
+			}
+			staticIssues = append(staticIssues, issue)
+		}
+	}
+
+	// Check for exact duplicates
+	for _, dups := range exactDupDetector.GetDuplicates() {
+		if len(dups) > 1 {
+			var locs []string
+			for _, loc := range dups {
+				locs = append(locs, fmt.Sprintf("%s:%d", loc.FilePath, loc.StartLine))
+			}
+			duplicateWarnings = append(duplicateWarnings,
+				fmt.Sprintf("Exact duplicate code found in: %s", strings.Join(locs, ", ")))
+		}
+	}
+
+	// Extract similarity-based duplicate warnings
+	for _, dups := range localResult.Duplicates {
+		for _, d := range dups {
+			duplicateWarnings = append(duplicateWarnings,
+				fmt.Sprintf("Potential duplicate of %s (Match: %.1f%%)", d.FilePath, d.Similarity*100))
+		}
+	}
+
+	// Report Reuse Candidates
+	for _, candidates := range localResult.ReuseCandidates {
+		for _, c := range candidates {
+			duplicateWarnings = append(duplicateWarnings,
+				fmt.Sprintf("Refactoring Opportunity: Similar logic in %s (Match: %.1f%%)", c.FilePath, c.Similarity*100))
+		}
+	}
+
+	// 3. Calculate Token Budget and Sample Repository
+	// Use larger budget for full repository review
+	diffBudget := FULL_REVIEW_TOKEN_BUDGET - SYSTEM_PROMPT_TOKENS - CONTEXT_TOKENS_AVG - BUFFER_TOKENS
+	if diffBudget > 25000 {
+		diffBudget = 25000 // Maximum
+	}
+
+	// Sample the repository using intelligent sampling
+	sampler := NewRepositorySampler(diffBudget)
+	sampledDiff, samplingReport := sampler.SampleRepository(diff, localResult.FileAnalysis)
+
+	// Display sampling report to user
+	fmt.Println("\n📊 Sampling Report:")
+	fmt.Printf("  • Total files in repository: %d\n", samplingReport.TotalFiles)
+	fmt.Printf("  • Filtered: %d (", samplingReport.FilteredFiles)
+	reasons := []string{}
+	for reason, count := range samplingReport.FilteredReasons {
+		reasons = append(reasons, fmt.Sprintf("%s: %d", reason, count))
+	}
+	fmt.Printf("%s)\n", strings.Join(reasons, ", "))
+	fmt.Printf("  • Reviewing: %d files\n", samplingReport.SampledFiles)
+
+	if len(samplingReport.TopRiskFiles) > 0 {
+		fmt.Println("\n🔴 High Priority Files:")
+		for i, risk := range samplingReport.TopRiskFiles {
+			if i >= 10 {
+				break
+			}
+			fmt.Printf("  • %s (Risk: %d) - %s\n", risk.File.Path, risk.Score, strings.Join(risk.Reasons, ", "))
+		}
+	}
+	fmt.Println()
+
+	// 4. Build Review Context for LLM with sampled diff
+	diffString := sampledDiff.Format()
+
+	reviewCtx := llm.ReviewContext{
+		Diff:           diffString,
+		Frameworks:     []string{}, // TODO: Load from context.json if available
+		Languages:      detectLanguages(diff),
+		StaticIssues:   staticIssues,
+		SimilarCode:    duplicateWarnings,
+		FileContext:    fmt.Sprintf("Full repository review: %d files (Sampled: %d/%d files)", len(diff.Files), samplingReport.SampledFiles, samplingReport.TotalFiles),
+		Classification: fmt.Sprintf("%s (Confidence: %.2f)", classification.Type, classification.Confidence),
+	}
+
+	// 5. Generate Prompt (with full repository context)
+	prompt := e.pmtBuilder.BuildReviewPrompt(reviewCtx, true) // true = isFullRepository
+
+	// 6. Query LLM
+	fmt.Println("🤖 Querying LLM for comprehensive repository review...")
+	// No limit for full repository reviews to ensure all issues are captured
+	// Setting to 0 means no limit (providers will handle appropriately)
+	resp, err := e.llmClient.GenerateCompletion(context.Background(), llm.CompletionRequest{
+		Messages: []llm.Message{
+			{Role: llm.RoleSystem, Content: llm.SystemPrompt},
+			{Role: llm.RoleUser, Content: prompt},
+		},
+		Temperature: 0.2,
+		MaxTokens:   0, // No limit for full repository reviews
+	})
+	if err != nil {
+		return nil, fmt.Errorf("LLM review failed: %w", err)
+	}
+
+	// 7. Synthesize Report with token usage
+	tokenUsage := TokenUsage{
+		InputTokens:  resp.Usage.PromptTokens,
+		OutputTokens: resp.Usage.CompletionTokens,
+		TotalTokens:  resp.Usage.TotalTokens,
+	}
+	report := e.synthesizer.Synthesize(resp.Content, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage)
+
+	// 7.5. Populate sampling information
+	e.populateSamplingInfo(report, diff, sampledDiff, samplingReport)
+
+	// 8. Populate duplicate blocks and AI patterns for HTML report
+	// For full repository, we analyze all files (not just changed code)
+	// exactDupDetector is already created above in step 2
+	e.populateDuplicateBlocks(report, exactDupDetector, localResult, diff)
+	// For full repo, analyze all code (not just changed lines)
+	e.populateAIPatternsFullRepo(report, localResult)
+
+	// 9. Generate HTML report if enabled
+	if e.shouldGenerateHTML() {
+		if err := e.generateHTMLReport(report, diff, e.diffRange); err != nil {
+			fmt.Printf("Warning: Failed to generate HTML report: %v\n", err)
+		}
+	}
+
+	return report, nil
+}
+
+// populateAIPatternsFullRepo extracts AI patterns from all files (not just changed code)
+func (e *ReviewEngine) populateAIPatternsFullRepo(report *ReviewReport, localResult *ReviewResult) {
+	if report.AIPatterns == nil {
+		report.AIPatterns = make(map[string][]analysis.AICodePattern)
+	}
+
+	aiDetector := analysis.NewAICodeDetector()
+	for filePath, fileAnalysis := range localResult.FileAnalysis {
+		patterns := aiDetector.DetectAIPatterns(fileAnalysis)
+		if len(patterns) > 0 {
+			report.AIPatterns[filePath] = patterns
+		}
+	}
 }
 
 // Helper function for min
@@ -727,6 +915,9 @@ func (e *ReviewEngine) determineIgnoreReason(file *git.DiffFile) string {
 	if isLockFile(file.Path) {
 		return "lock_file"
 	}
+	if isPackageManagementFile(file.Path) {
+		return "package_management"
+	}
 	if isBinaryFile(file.Path) {
 		return "binary"
 	}
@@ -778,7 +969,11 @@ func (e *ReviewEngine) generateHTMLReport(report *ReviewReport, diff *git.Diff, 
 	}
 	diffInfo.ProjectName = projectName
 	
-	if diffRange != "" {
+	// Check if this is a full repository review
+	if diffRange == "full repository" {
+		diffInfo.IsFullRepository = true
+		diffInfo.Range = "full repository"
+	} else if diffRange != "" {
 		diffInfo.Range = diffRange
 		// Extract commit SHAs from range (e.g., "main..feature" -> get SHAs for both)
 		if strings.Contains(diffRange, "..") {

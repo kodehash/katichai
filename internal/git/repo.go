@@ -136,3 +136,26 @@ func (r *Repository) GetProjectName() (string, error) {
 	
 	return projectName, nil
 }
+
+// GetAllTrackedFiles returns all tracked files in the repository
+func (r *Repository) GetAllTrackedFiles() ([]string, error) {
+	cmd := exec.Command("git", "ls-files")
+	cmd.Dir = r.RootPath
+	
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tracked files: %w", err)
+	}
+	
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	files := make([]string, 0, len(lines))
+	
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	
+	return files, nil
+}

@@ -42,6 +42,9 @@ func (f *Formatter) FormatHTML(report *ReviewReport, fileContents map[string]str
                 <a href="#file-sampling" class="block px-3 py-2 rounded hover:bg-gray-100 mb-2 text-sm font-medium text-gray-700">📁 File Sampling</a>
                 {{end}}
                 <a href="#critical-issues" class="block px-3 py-2 rounded hover:bg-gray-100 mb-2 text-sm font-medium text-gray-700">⚠️ Critical Issues</a>
+                {{if .HasComplexity}}
+                <a href="#complexity" class="block px-3 py-2 rounded hover:bg-gray-100 mt-2 text-sm font-medium text-gray-700">🔧 Unnecessary Complexity</a>
+                {{end}}
                 {{if .HasDuplicates}}
                 <a href="#duplicates" class="block px-3 py-2 rounded hover:bg-gray-100 mt-2 text-sm font-medium text-gray-700">🔄 Duplicate Code</a>
                 {{end}}
@@ -65,7 +68,9 @@ func (f *Formatter) FormatHTML(report *ReviewReport, fileContents map[string]str
                         <p class="text-gray-600 mt-1">Generated on {{.Timestamp}}</p>
                         {{if .DiffInfo}}
                         <p class="text-gray-500 text-sm mt-1">
-                            {{if .DiffInfo.Range}}
+                            {{if .DiffInfo.IsFullRepository}}
+                            <span class="font-medium">Review Type:</span> <span class="font-semibold text-blue-600">Full Repository Review</span>
+                            {{else if .DiffInfo.Range}}
                             <span class="font-medium">Range:</span> {{.DiffInfo.Range}}
                             {{if and .DiffInfo.FromCommit .DiffInfo.ToCommit}}
                             <span class="ml-4">({{.DiffInfo.FromCommit}}..{{.DiffInfo.ToCommit}})</span>
@@ -233,6 +238,62 @@ func (f *Formatter) FormatHTML(report *ReviewReport, fileContents map[string]str
             </section>
             {{end}}
 
+            <!-- Unnecessary Complexity -->
+            {{if .ComplexityIssues}}
+            <section id="complexity" class="p-6 border-t border-gray-200">
+                <button onclick="toggleSection('complexity-content')" class="flex items-center justify-between w-full text-left">
+                    <div>
+                        <h2 class="text-2xl font-bold text-gray-900">🔧 Unnecessary Complexity</h2>
+                        <p class="text-sm text-gray-500 mt-1">{{len .ComplexityIssues}} issue{{if ne (len .ComplexityIssues) 1}}s{{end}}</p>
+                    </div>
+                    <span class="text-gray-500" id="complexity-toggle">▶</span>
+                </button>
+                <div id="complexity-content" class="mt-4" style="display: none;">
+                <div class="space-y-3">
+                    {{range .ComplexityIssues}}
+                    <div class="bg-white p-4 rounded-lg shadow border-l-4 {{if eq .Type "architectural"}}border-purple-500{{else}}border-orange-500{{end}}">
+                        <div class="flex items-start justify-between">
+                            <div class="flex-1">
+                                <div class="flex items-center gap-2 mb-2">
+                                    <span class="px-2 py-1 text-xs font-semibold rounded {{if eq .Type "architectural"}}bg-purple-100 text-purple-800{{else}}bg-orange-100 text-orange-800{{end}}">
+                                        {{if eq .Type "architectural"}}Architectural{{else}}Code{{end}}
+                                    </span>
+                                    <span class="px-2 py-1 text-xs font-semibold rounded {{if gt .Score 0.6}}bg-red-100 text-red-800{{else if gt .Score 0.3}}bg-yellow-100 text-yellow-800{{else}}bg-blue-100 text-blue-800{{end}}">
+                                        {{if gt .Score 0.6}}High{{else if gt .Score 0.3}}Medium{{else}}Low{{end}} ({{printf "%.0f" (multiply .Score 100)}}%)
+                                    </span>
+                                </div>
+                                <p class="text-gray-800 font-medium mb-2">{{.Description}}</p>
+                                {{if .File}}
+                                <p class="text-sm text-gray-600 mb-2">
+                                    <span class="font-medium">Location:</span> 
+                                    <a href="#file-{{.FileID}}" class="text-blue-600 hover:underline">{{.File}}{{if gt .Line 0}}:{{.Line}}{{end}}</a>
+                                    {{if .Function}}
+                                    <span class="ml-2">- Function: <code class="bg-gray-100 px-1 rounded">{{.Function}}</code></span>
+                                    {{end}}
+                                </p>
+                                {{end}}
+                                {{if .Reasoning}}
+                                <div class="mt-3 p-3 bg-gray-50 rounded border-l-4 border-gray-400">
+                                    <p class="text-sm text-gray-700">
+                                        <span class="font-semibold">📝 Reasoning:</span> {{.Reasoning}}
+                                    </p>
+                                </div>
+                                {{end}}
+                                {{if .Suggestion}}
+                                <div class="mt-3 p-3 bg-blue-50 rounded border-l-4 border-blue-400">
+                                    <p class="text-sm text-gray-700">
+                                        <span class="font-semibold">💡 Suggestion:</span> {{.Suggestion}}
+                                    </p>
+                                </div>
+                                {{end}}
+                            </div>
+                        </div>
+                    </div>
+                    {{end}}
+                </div>
+                </div>
+            </section>
+            {{end}}
 
             <!-- Duplicate Code -->
             {{if .DuplicateBlocks}}
@@ -449,10 +510,11 @@ func (f *Formatter) FormatHTML(report *ReviewReport, fileContents map[string]str
 
 // DiffInfo contains information about the diff being reviewed
 type DiffInfo struct {
-	Range       string // e.g., "main..feature-branch" or "HEAD~3..HEAD"
-	FromCommit  string // Starting commit SHA
-	ToCommit    string // Ending commit SHA
-	ProjectName string // Project name
+	Range           string // e.g., "main..feature-branch" or "HEAD~3..HEAD" or "full repository"
+	FromCommit      string // Starting commit SHA
+	ToCommit        string // Ending commit SHA
+	ProjectName     string // Project name
+	IsFullRepository bool  // True if this is a full repository review
 }
 
 // htmlData holds all data for HTML template rendering
@@ -491,6 +553,8 @@ type htmlData struct {
 	DuplicateCount     int
 	HasDuplicates      bool
 	HasAI              bool
+	HasComplexity       bool
+	ComplexityIssues    []complexityIssueHTML
 	CriticalIssues     []criticalIssueHTML
 	DuplicateBlocks    []duplicateBlockHTML
 	AIFiles            []aiFileHTML
@@ -553,6 +617,18 @@ type staticAnalysisCategoryHTML struct {
 	Issues   []staticAnalysisIssueHTML
 }
 
+type complexityIssueHTML struct {
+	File        string
+	Line        int
+	Function    string
+	Score       float64
+	Description string
+	Reasoning   string
+	Suggestion  string
+	Type        string
+	FileID      string
+}
+
 func (f *Formatter) prepareHTMLData(report *ReviewReport, fileContents map[string]string, diffInfo *DiffInfo) *htmlData {
 	data := &htmlData{
 		Timestamp:          time.Now().Format("2006-01-02 15:04:05"),
@@ -567,6 +643,8 @@ func (f *Formatter) prepareHTMLData(report *ReviewReport, fileContents map[strin
 		DuplicateCount:     len(report.DuplicateBlocks),
 		HasDuplicates:      len(report.DuplicateBlocks) > 0,
 		HasAI:              false,
+		HasComplexity:       len(report.ComplexityIssues) > 0,
+		ComplexityIssues:    f.prepareComplexityIssues(report.ComplexityIssues),
 	}
 
 	// Status styling (commented out - scoring is subjective)
@@ -789,16 +867,40 @@ func (f *Formatter) prepareHTMLData(report *ReviewReport, fileContents map[strin
 	return data
 }
 
+// prepareComplexityIssues converts complexity issues to HTML format
+func (f *Formatter) prepareComplexityIssues(issues []ComplexityIssue) []complexityIssueHTML {
+	result := make([]complexityIssueHTML, 0, len(issues))
+	for _, issue := range issues {
+		// Create a file ID for linking
+		fileID := strings.ReplaceAll(issue.File, "/", "-")
+		fileID = strings.ReplaceAll(fileID, ".", "-")
+		
+		result = append(result, complexityIssueHTML{
+			File:        issue.File,
+			Line:        issue.Line,
+			Function:    issue.Function,
+			Score:       issue.Score,
+			Description: issue.Description,
+			Reasoning:   issue.Reasoning,
+			Suggestion:  issue.Suggestion,
+			Type:        issue.Type,
+			FileID:      fileID,
+		})
+	}
+	return result
+}
+
 // formatIgnoreReason formats the ignore reason for display
 func (f *Formatter) formatIgnoreReason(reason string) string {
 	reasonMap := map[string]string{
-		"no_changes":    "No Changes",
-		"hidden":        "Hidden File",
-		"generated":     "Generated",
-		"lock_file":     "Lock File",
-		"binary":        "Binary File",
-		"test":          "Test File",
-		"low_priority":  "Low Priority",
+		"no_changes":         "No Changes",
+		"hidden":             "Hidden File",
+		"generated":          "Generated",
+		"lock_file":          "Lock File",
+		"package_management": "Package Management",
+		"binary":             "Binary File",
+		"test":               "Test File",
+		"low_priority":       "Low Priority",
 	}
 	
 	if label, ok := reasonMap[reason]; ok {

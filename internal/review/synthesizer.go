@@ -20,6 +20,19 @@ type ReviewReport struct {
 	DuplicateBlocks []DuplicateBlockInfo              `json:"duplicate_blocks,omitempty"`
 	AIPatterns      map[string][]analysis.AICodePattern `json:"ai_patterns,omitempty"`
 	SamplingInfo    *SamplingInfo                     `json:"sampling_info,omitempty"`
+	ComplexityIssues []ComplexityIssue                `json:"complexity_issues,omitempty"`
+}
+
+// ComplexityIssue represents an unnecessarily complex code block or architectural pattern
+type ComplexityIssue struct {
+	File        string  `json:"file"`
+	Line        int     `json:"line"`
+	Function    string  `json:"function"`
+	Score       float64 `json:"score"` // 0.0-1.0, higher = more unnecessarily complex
+	Description string  `json:"description"`
+	Reasoning   string  `json:"reasoning"` // Detailed explanation of why it's unnecessarily complex
+	Suggestion  string  `json:"suggestion"`
+	Type        string  `json:"type"` // "code" or "architectural"
 }
 
 // SamplingInfo contains information about which files were reviewed and which were ignored
@@ -114,7 +127,13 @@ func (s *Synthesizer) Synthesize(llmOutput string, staticIssues []analysis.Issue
 		// report.Score -= 5  // Commented out - scoring is subjective
 	}
 
-	// 4. Final adjustments (commented out - scoring is subjective)
+	// 4. Parse Complexity Issues from LLM output
+	s.parseComplexityIssues(llmOutput, report)
+
+	// 5. Deduplicate complexity issues
+	s.deduplicateComplexityIssues(report)
+
+	// 6. Final adjustments (commented out - scoring is subjective)
 	// if report.Score < 0 {
 	// 	report.Score = 0
 	// }
@@ -123,6 +142,132 @@ func (s *Synthesizer) Synthesize(llmOutput string, staticIssues []analysis.Issue
 	// }
 
 	return report
+}
+
+// parseComplexityIssues extracts complexity issues from LLM output
+func (s *Synthesizer) parseComplexityIssues(output string, report *ReviewReport) {
+	// Look for "## Unnecessary Complexity" section
+	complexityRe := regexp.MustCompile(`(?s)## Unnecessary Complexity\s+(.*?)(##|$)`)
+	if match := complexityRe.FindStringSubmatch(output); len(match) > 1 {
+		content := match[1]
+		// Split by lines but keep track of which issue we're parsing
+		lines := strings.Split(content, "\n")
+		
+		var currentIssue *ComplexityIssue
+		var currentField string
+		
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			
+			// Check if this is a new issue (starts with "- [")
+			if strings.HasPrefix(line, "- [") {
+				// Save previous issue if exists
+				if currentIssue != nil {
+					report.ComplexityIssues = append(report.ComplexityIssues, *currentIssue)
+				}
+				
+				// Start new issue
+				trimmed := strings.TrimPrefix(line, "- ")
+				
+				// Extract type (COMPLEXITY or ARCHITECTURAL)
+				issueType := "code"
+				if strings.Contains(trimmed, "[ARCHITECTURAL]") {
+					issueType = "architectural"
+				}
+				
+				// Extract location (file:line)
+				locationRe := regexp.MustCompile(`(\S+):(\d+)`)
+				locationMatch := locationRe.FindStringSubmatch(trimmed)
+				if len(locationMatch) < 3 {
+					currentIssue = nil
+					continue
+				}
+				filePath := locationMatch[1]
+				lineNum := 0
+				fmt.Sscanf(locationMatch[2], "%d", &lineNum)
+				
+				// Extract function name if present
+				functionName := ""
+				funcRe := regexp.MustCompile(`Function:\s*(\S+)`)
+				if funcMatch := funcRe.FindStringSubmatch(trimmed); len(funcMatch) > 1 {
+					functionName = funcMatch[1]
+				}
+				
+				// Extract score
+				score := 0.0
+				scoreRe := regexp.MustCompile(`Score:\s*(\d+)/100`)
+				if scoreMatch := scoreRe.FindStringSubmatch(trimmed); len(scoreMatch) > 1 {
+					var scoreInt int
+					fmt.Sscanf(scoreMatch[1], "%d", &scoreInt)
+					score = float64(scoreInt) / 100.0
+				}
+				
+				currentIssue = &ComplexityIssue{
+					File:        filePath,
+					Line:        lineNum,
+					Function:    functionName,
+					Score:       score,
+					Description: "",
+					Reasoning:   "",
+					Suggestion:  "",
+					Type:        issueType,
+				}
+				currentField = ""
+			} else if currentIssue != nil {
+				// This is a continuation line for the current issue
+				// Check if it's a labeled field
+				if strings.HasPrefix(line, "Description:") {
+					currentField = "description"
+					currentIssue.Description = strings.TrimSpace(strings.TrimPrefix(line, "Description:"))
+				} else if strings.HasPrefix(line, "Reasoning:") {
+					currentField = "reasoning"
+					currentIssue.Reasoning = strings.TrimSpace(strings.TrimPrefix(line, "Reasoning:"))
+				} else if strings.HasPrefix(line, "Suggestion:") {
+					currentField = "suggestion"
+					currentIssue.Suggestion = strings.TrimSpace(strings.TrimPrefix(line, "Suggestion:"))
+				} else {
+					// Continuation of the current field
+					if currentField == "description" && currentIssue.Description != "" {
+						currentIssue.Description += " " + line
+					} else if currentField == "reasoning" && currentIssue.Reasoning != "" {
+						currentIssue.Reasoning += " " + line
+					} else if currentField == "suggestion" && currentIssue.Suggestion != "" {
+						currentIssue.Suggestion += " " + line
+					} else if currentField == "" {
+						// No field set yet, assume it's description
+						if currentIssue.Description == "" {
+							currentIssue.Description = line
+						}
+					}
+				}
+			}
+		}
+		
+		// Don't forget the last issue
+		if currentIssue != nil {
+			report.ComplexityIssues = append(report.ComplexityIssues, *currentIssue)
+		}
+	}
+}
+
+// deduplicateComplexityIssues removes duplicate complexity issues
+func (s *Synthesizer) deduplicateComplexityIssues(report *ReviewReport) {
+	seen := make(map[string]bool)
+	unique := make([]ComplexityIssue, 0)
+	
+	for _, issue := range report.ComplexityIssues {
+		// Create a signature based on file, line, and normalized description
+		signature := fmt.Sprintf("%s:%d:%s", issue.File, issue.Line, strings.ToLower(issue.Description))
+		if !seen[signature] {
+			seen[signature] = true
+			unique = append(unique, issue)
+		}
+	}
+	
+	report.ComplexityIssues = unique
 }
 
 func (s *Synthesizer) parseLLMOutput(output string, report *ReviewReport) {

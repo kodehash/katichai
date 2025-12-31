@@ -119,6 +119,32 @@ Your role is to review code changes with a strict focus on architect-level conce
    - Detect "AI Slop": Boilerplate, hallucinatory APIs, or over-engineered abstractions.
    - Ignore minor formatting/nitpicks unless they severely violate readability.
 
+7. UNNECESSARY COMPLEXITY DETECTION
+   - Identify over-engineered code blocks AND architectural approaches where simpler solutions exist
+   - Flag unnecessary abstractions, verbose implementations, over-nesting, and architectural over-complexity
+   - Detect unnecessarily complicated architectural approaches:
+     * Over-application of design patterns (factory, builder, strategy, command, decorator) where not needed
+     * Multiple layers of abstraction for simple operations (Service -> Manager -> Handler -> Processor chains)
+     * Complex architectural patterns for simple use cases:
+       - Microservices architecture for simple monolith
+       - Event-driven architecture for synchronous operations
+       - CQRS pattern for simple CRUD operations
+     * Unnecessary architectural layers:
+       - Repository pattern with single data source
+       - Service layer for simple business logic
+       - Multiple layers of indirection without benefit
+     * Dependency injection overuse (injecting simple values/constants)
+     * Plugin/extension architecture for fixed functionality
+     * Complex state management for simple state
+     * Unnecessary middleware chains
+     * Over-engineered error handling (custom error types for simple cases)
+     * Complex configuration systems for simple settings
+     * Abstract classes/interfaces with single implementation
+   - Provide a complexity score (0-100) for each identified issue
+   - Suggest simpler alternatives (both code-level and architectural)
+   - Focus on code/architecture that could be 50%+ simpler without losing functionality
+   - Distinguish between legitimate complexity (complex domain logic, algorithms) and unnecessary complexity (over-engineering)
+
 Output your review in the following Markdown format:
 ## Summary
 (Brief executive summary of the changes, highlighting key architectural, security, and performance concerns)
@@ -131,6 +157,16 @@ Output your review in the following Markdown format:
 
 ## Suggestions
 - Details of improvements...
+
+## Unnecessary Complexity
+- [COMPLEXITY] file.go:123 - Function: functionName - Score: 75/100
+  Description: Brief summary of the unnecessary complexity...
+  Reasoning: Detailed explanation of why this is unnecessarily complex (e.g., "This function uses 5 levels of nesting when 2 would suffice. The logic could be simplified by extracting helper functions and using early returns. The current implementation requires 40 lines to accomplish what could be done in 15 lines.")
+  Suggestion: Simpler alternative approach...
+- [ARCHITECTURAL] file.go:1 - Score: 80/100
+  Description: Brief summary of the unnecessarily complex architectural pattern...
+  Reasoning: Detailed explanation of why this architecture is unnecessarily complex (e.g., "This codebase uses a Service -> Manager -> Handler -> Processor chain for a simple CRUD operation. A single service layer would be sufficient. The multiple layers add indirection without providing any benefit.")
+  Suggestion: Simpler architectural approach...
 
 ## Score
 (0-100 Confidence Score on readiness to merge)
@@ -156,10 +192,23 @@ func NewPromptBuilder() *PromptBuilder {
 }
 
 // BuildReviewPrompt constructs the user message for the code review
-func (p *PromptBuilder) BuildReviewPrompt(ctx ReviewContext) string {
+// isFullRepository indicates if this is a full repository review (true) or diff-based review (false)
+func (p *PromptBuilder) BuildReviewPrompt(ctx ReviewContext, isFullRepository ...bool) string {
 	var sb strings.Builder
 
-	sb.WriteString("Please review the following code changes.\n\n")
+	fullRepo := false
+	if len(isFullRepository) > 0 && isFullRepository[0] {
+		fullRepo = true
+	}
+
+	if fullRepo {
+		sb.WriteString("Please perform a comprehensive review of the entire codebase.\n\n")
+		sb.WriteString("**Review Type**: Full Repository Review\n")
+		sb.WriteString("This is a comprehensive analysis of the entire codebase, not just changes.\n")
+		sb.WriteString("Focus on overall architecture, patterns, consistency, and code quality across the repository.\n\n")
+	} else {
+		sb.WriteString("Please review the following code changes.\n\n")
+	}
 
 	if ctx.Classification != "" {
 		sb.WriteString(fmt.Sprintf("**Change Classification**: %s\n\n", ctx.Classification))
@@ -197,13 +246,31 @@ func (p *PromptBuilder) BuildReviewPrompt(ctx ReviewContext) string {
 		sb.WriteString("\n")
 	}
 
-	// 4. The Diff
-	sb.WriteString("### Code Changes (Diff)\n")
-	sb.WriteString("```diff\n")
-	sb.WriteString(ctx.Diff)
-	sb.WriteString("\n```\n")
+	// 4. The Diff or Code
+	if fullRepo {
+		sb.WriteString("### Repository Code\n")
+		sb.WriteString("The following represents a sampled view of the repository code:\n")
+		sb.WriteString("```\n")
+		sb.WriteString(ctx.Diff)
+		sb.WriteString("\n```\n")
+		sb.WriteString("\nNote: This is a sampled representation of the full repository. Focus on:")
+		sb.WriteString("\n- Overall architectural patterns and consistency")
+		sb.WriteString("\n- Code quality and maintainability across the codebase")
+		sb.WriteString("\n- Security vulnerabilities in the reviewed files")
+		sb.WriteString("\n- Design patterns and their proper usage")
+		sb.WriteString("\n- Potential improvements and refactoring opportunities")
+	} else {
+		sb.WriteString("### Code Changes (Diff)\n")
+		sb.WriteString("```diff\n")
+		sb.WriteString(ctx.Diff)
+		sb.WriteString("\n```\n")
+	}
 
-	sb.WriteString("\nBased on the above, provide your architectural and security review.")
+	if fullRepo {
+		sb.WriteString("\nBased on the above, provide your comprehensive architectural and security review of the codebase.")
+	} else {
+		sb.WriteString("\nBased on the above, provide your architectural and security review.")
+	}
 	sb.WriteString("\n\nMANDATORY SECURITY REVIEW CHECKLIST:")
 	sb.WriteString("\nBefore submitting your review, verify you have checked:")
 	sb.WriteString("\n✓ All user inputs for injection vulnerabilities")

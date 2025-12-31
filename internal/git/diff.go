@@ -2,7 +2,9 @@ package git
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -260,4 +262,55 @@ func (r *Repository) GetFullDiff(ref string) (string, error) {
 	}
 
 	return string(output), nil
+}
+
+// GetFullRepositoryDiff returns a Diff structure containing all tracked files
+// This is used for full repository reviews (not diff-based)
+func (r *Repository) GetFullRepositoryDiff() (*Diff, error) {
+	// Get all tracked files
+	files, err := r.GetAllTrackedFiles()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tracked files: %w", err)
+	}
+
+	diffFiles := make([]*DiffFile, 0, len(files))
+
+	for _, filePath := range files {
+		// Read file content from working directory
+		fullPath := filepath.Join(r.RootPath, filePath)
+		content, err := os.ReadFile(fullPath)
+		if err != nil {
+			// Skip files that can't be read (might be deleted, binary, etc.)
+			continue
+		}
+
+		// Count lines for additions
+		lines := strings.Split(string(content), "\n")
+		additions := len(lines)
+
+		// Format content as if it's a new file (for compatibility with diff format)
+		// We'll format it as: +++ filepath\n+line1\n+line2...
+		var patch strings.Builder
+		patch.WriteString(fmt.Sprintf("+++ %s\n", filePath))
+		for _, line := range lines {
+			patch.WriteString("+")
+			patch.WriteString(line)
+			patch.WriteString("\n")
+		}
+
+		diffFile := &DiffFile{
+			Path:      filePath,
+			Status:    "M", // Modified (existing file)
+			Additions: additions,
+			Deletions: 0,
+			Patch:     patch.String(),
+		}
+
+		diffFiles = append(diffFiles, diffFile)
+	}
+
+	return &Diff{
+		Files:   diffFiles,
+		Summary: fmt.Sprintf("Full repository review: %d files", len(diffFiles)),
+	}, nil
 }

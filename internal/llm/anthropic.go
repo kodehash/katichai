@@ -42,7 +42,10 @@ func (p *AnthropicProvider) GenerateCompletion(ctx context.Context, req Completi
 	}
 
 	if anthropicReq["max_tokens"] == 0 {
-		anthropicReq["max_tokens"] = 4096 // Default for Claude 3.5 Sonnet
+		// MaxTokens = 0 means no limit requested (typically for full repository reviews)
+		// Use a very high limit to ensure no truncation
+		// Claude 3.5 Sonnet supports up to 8192, but we use 32768 for comprehensive reviews
+		anthropicReq["max_tokens"] = 32768
 	}
 
 	// Extract system message if present (Anthropic handles system differently)

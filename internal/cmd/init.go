@@ -77,7 +77,7 @@ analysis:
   ignore_trivial_patterns: true
   sampling:
     enabled: true
-    max_files: 20
+    max_files: 50
     context_lines: 2
     skip_generated: true
     skip_tests: false

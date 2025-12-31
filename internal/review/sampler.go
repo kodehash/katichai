@@ -13,13 +13,15 @@ import (
 
 // Token budget constants
 const (
-	TOTAL_INPUT_BUDGET    = 20000
-	SYSTEM_PROMPT_TOKENS  = 1500
-	CONTEXT_TOKENS_AVG    = 2000
-	BUFFER_TOKENS         = 1000
-	MAX_CONTEXT_LINES     = 2
-	MAX_FILES_TO_REVIEW   = 20
-	LARGE_FILE_THRESHOLD  = 500 // Lines changed
+	TOTAL_INPUT_BUDGET       = 20000
+	SYSTEM_PROMPT_TOKENS     = 1500
+	CONTEXT_TOKENS_AVG       = 2000
+	BUFFER_TOKENS            = 1000
+	MAX_CONTEXT_LINES        = 2
+	MAX_FILES_TO_REVIEW      = 20
+	LARGE_FILE_THRESHOLD     = 500 // Lines changed
+	MAX_FILES_FULL_REVIEW    = 100 // Maximum files for full repository review
+	FULL_REVIEW_TOKEN_BUDGET = 30000 // Token budget for full repository review
 )
 
 // DiffSampler samples diffs intelligently to fit token budgets
@@ -208,6 +210,12 @@ func (s *DiffSampler) filterNoise(files []*git.DiffFile, report *SamplingReport)
 		// Check if lock file
 		if isLockFile(file.Path) {
 			report.FilteredReasons["lock_file"]++
+			continue
+		}
+		
+		// Check if package management file
+		if isPackageManagementFile(file.Path) {
+			report.FilteredReasons["package_management"]++
 			continue
 		}
 		
@@ -483,6 +491,185 @@ func isTestFile(path string) bool {
 		strings.Contains(path, "/test/") ||
 		strings.Contains(path, "/tests/") ||
 		strings.Contains(path, "__tests__/")
+}
+
+// isPackageManagementFile checks if a file is a package management configuration file
+func isPackageManagementFile(path string) bool {
+	base := filepath.Base(path)
+	pathLower := strings.ToLower(path)
+	baseLower := strings.ToLower(base)
+	
+	// JavaScript/TypeScript/Node.js
+	packageFiles := []string{
+		"package.json",
+		"package-lock.json", // Also in isLockFile, but check here too
+		"yarn.lock",         // Also in isLockFile
+		"pnpm-lock.yaml",    // Also in isLockFile
+		".npmrc",
+		".yarnrc",
+		".yarnrc.yml",
+	}
+	
+	// Java/Gradle/Maven
+	javaFiles := []string{
+		"build.gradle",
+		"build.gradle.kts",
+		"settings.gradle",
+		"settings.gradle.kts",
+		"gradle.properties",
+		"gradle-wrapper.properties",
+		"pom.xml",
+		"build.xml",
+		"project.clj", // Clojure/Leiningen
+	}
+	
+	// Python
+	pythonFiles := []string{
+		"requirements.txt",
+		"requirements-dev.txt",
+		"requirements-test.txt",
+		"setup.py",
+		"setup.cfg",
+		"pyproject.toml",
+		"Pipfile",
+		"Pipfile.lock", // Also in isLockFile
+		"poetry.lock",  // Also in isLockFile
+		"MANIFEST.in",
+		"conda.yml",
+		"environment.yml",
+	}
+	
+	// Go
+	goFiles := []string{
+		"go.mod",
+		"go.sum", // Also in isLockFile
+		"Gopkg.toml",
+		"Gopkg.lock",
+		"glide.yaml",
+		"glide.lock",
+		"vendor.json",
+	}
+	
+	// Rust
+	rustFiles := []string{
+		"Cargo.toml",
+		"Cargo.lock", // Also in isLockFile
+	}
+	
+	// Ruby
+	rubyFiles := []string{
+		"Gemfile",
+		"Gemfile.lock", // Also in isLockFile
+		"Rakefile",
+		".ruby-version",
+		".ruby-gemset",
+	}
+	
+	// PHP
+	phpFiles := []string{
+		"composer.json",
+		"composer.lock", // Also in isLockFile
+	}
+	
+	// .NET (exact filenames)
+	dotnetFiles := []string{
+		"packages.config",
+		"project.json",
+		"project.assets.json",
+	}
+	
+	// Swift
+	swiftFiles := []string{
+		"Package.swift",
+		"Package.resolved",
+	}
+	
+	// Dart/Flutter
+	dartFiles := []string{
+		"pubspec.yaml",
+		"pubspec.lock",
+		"pubspec.yml",
+	}
+	
+	// Elixir
+	elixirFiles := []string{
+		"mix.exs",
+		"mix.lock",
+	}
+	
+	// Haskell
+	haskellFiles := []string{
+		"stack.yaml",
+		"cabal.project",
+	}
+	
+	// Scala
+	scalaFiles := []string{
+		"build.sbt",
+		"project/build.properties",
+		"project/plugins.sbt",
+	}
+	
+	// Combine all package management files
+	allPackageFiles := packageFiles
+	allPackageFiles = append(allPackageFiles, javaFiles...)
+	allPackageFiles = append(allPackageFiles, pythonFiles...)
+	allPackageFiles = append(allPackageFiles, goFiles...)
+	allPackageFiles = append(allPackageFiles, rustFiles...)
+	allPackageFiles = append(allPackageFiles, rubyFiles...)
+	allPackageFiles = append(allPackageFiles, phpFiles...)
+	allPackageFiles = append(allPackageFiles, dotnetFiles...)
+	allPackageFiles = append(allPackageFiles, swiftFiles...)
+	allPackageFiles = append(allPackageFiles, dartFiles...)
+	allPackageFiles = append(allPackageFiles, elixirFiles...)
+	allPackageFiles = append(allPackageFiles, haskellFiles...)
+	allPackageFiles = append(allPackageFiles, scalaFiles...)
+	
+	// Check exact filename matches
+	for _, pkgFile := range allPackageFiles {
+		if baseLower == strings.ToLower(pkgFile) {
+			return true
+		}
+	}
+	
+	// Check for .NET project files with extensions
+	ext := filepath.Ext(pathLower)
+	dotnetExts := []string{".csproj", ".vbproj", ".fsproj"}
+	for _, dotnetExt := range dotnetExts {
+		if ext == dotnetExt {
+			return true
+		}
+	}
+	
+	// Check for Haskell .cabal files
+	if ext == ".cabal" {
+		return true
+	}
+	
+	// Check for files in package management directories
+	packageDirs := []string{
+		"/gradle/",
+		"/.gradle/",
+		"/node_modules/",
+		"/vendor/",
+		"/venv/",
+		"/.venv/",
+		"/env/",
+		"/.env/",
+		"/__pycache__/",
+		"/target/", // Rust, Scala
+		"/.cargo/",
+		"/.bundle/",
+		"/.mvn/",
+	}
+	
+	for _, pkgDir := range packageDirs {
+		if strings.Contains(pathLower, pkgDir) {
+			return true
+		}
+	}
+	
+	return false
 }
 
 func isSecuritySensitive(path string) bool {

@@ -87,6 +87,42 @@ func (f *Formatter) FormatText(report *ReviewReport) string {
 		sb.WriteString("\n")
 	}
 
+	// Unnecessary Complexity
+	if len(report.ComplexityIssues) > 0 {
+		sb.WriteString("🔧 UNNECESSARY COMPLEXITY\n")
+		for _, issue := range report.ComplexityIssues {
+			typeLabel := "Code"
+			if issue.Type == "architectural" {
+				typeLabel = "Architectural"
+			}
+			scoreLabel := "Low"
+			if issue.Score > 0.6 {
+				scoreLabel = "High"
+			} else if issue.Score > 0.3 {
+				scoreLabel = "Medium"
+			}
+			
+			sb.WriteString(fmt.Sprintf("  [%s] %s (Score: %.0f%% - %s)\n", typeLabel, issue.Description, issue.Score*100, scoreLabel))
+			if issue.File != "" {
+				location := issue.File
+				if issue.Line > 0 {
+					location = fmt.Sprintf("%s:%d", issue.File, issue.Line)
+				}
+				if issue.Function != "" {
+					location = fmt.Sprintf("%s - Function: %s", location, issue.Function)
+				}
+				sb.WriteString(fmt.Sprintf("    📍 %s\n", location))
+			}
+			if issue.Reasoning != "" {
+				sb.WriteString(fmt.Sprintf("    📝 Reasoning: %s\n", issue.Reasoning))
+			}
+			if issue.Suggestion != "" {
+				sb.WriteString(fmt.Sprintf("    💡 Suggestion: %s\n", issue.Suggestion))
+			}
+		}
+		sb.WriteString("\n")
+	}
+
 	// Static Analysis (summary only - show file counts per type)
 	if len(staticIssues) > 0 {
 		sb.WriteString("📊 STATIC ANALYSIS (informational, not affecting score)\n")
