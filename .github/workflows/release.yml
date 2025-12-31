@@ -39,3 +39,133 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  sync-release:
+    needs: release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Setup GitHub CLI
+        run: |
+          gh --version
+
+      - name: Extract tag name
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG=${GITHUB_REF#refs/tags/}
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Extracted tag: $TAG"
+
+      - name: Get release information
+        id: release-info
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          RELEASE_INFO=$(gh release view "$TAG" --repo ${{ github.repository }} --json title,body,isPrerelease)
+          TITLE=$(echo "$RELEASE_INFO" | jq -r '.title')
+          NOTES=$(echo "$RELEASE_INFO" | jq -r '.body')
+          IS_PRERELEASE=$(echo "$RELEASE_INFO" | jq -r '.isPrerelease')
+          
+          echo "title<<EOF" >> $GITHUB_OUTPUT
+          echo "$TITLE" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$NOTES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+          echo "Release title: $TITLE"
+          echo "Is prerelease: $IS_PRERELEASE"
+
+      - name: Download release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          mkdir -p ./artifacts
+          gh release download "$TAG" --repo ${{ github.repository }} -D ./artifacts
+          echo "Downloaded assets:"
+          ls -lh ./artifacts/
+
+      - name: Create release in target repository
+        env:
+          GITHUB_TOKEN: ${{ secrets.SYNC_REPO_TOKEN }}
+          TARGET_OWNER: ${{ secrets.SYNC_REPO_OWNER }}
+          TARGET_REPO: ${{ secrets.SYNC_REPO_NAME }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          TITLE="${{ steps.release-info.outputs.title }}"
+          NOTES="${{ steps.release-info.outputs.notes }}"
+          IS_PRERELEASE="${{ steps.release-info.outputs.is_prerelease }}"
+          
+          echo "Creating release $TAG in $TARGET_OWNER/$TARGET_REPO"
+          
+          gh release create "$TAG" \
+            --repo "$TARGET_OWNER/$TARGET_REPO" \
+            --title "$TITLE" \
+            --notes "$NOTES" \
+            --prerelease="$IS_PRERELEASE" || {
+            if [ $? -eq 1 ]; then
+              echo "Release already exists, continuing to upload assets..."
+            else
+              exit 1
+            fi
+          }
+
+      - name: Upload binaries and checksums to target release
+        env:
+          GITHUB_TOKEN: ${{ secrets.SYNC_REPO_TOKEN }}
+          TARGET_OWNER: ${{ secrets.SYNC_REPO_OWNER }}
+          TARGET_REPO: ${{ secrets.SYNC_REPO_NAME }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          
+          echo "Uploading artifacts to $TARGET_OWNER/$TARGET_REPO..."
+          
+          # Upload all artifacts (binaries and checksums)
+          for file in ./artifacts/*; do
+            if [ -f "$file" ]; then
+              echo "Uploading $(basename $file)..."
+              gh release upload "$TAG" "$file" --repo "$TARGET_OWNER/$TARGET_REPO" --clobber || true
+            fi
+          done
+
+      - name: Upload USAGE.md to target release
+        env:
+          GITHUB_TOKEN: ${{ secrets.SYNC_REPO_TOKEN }}
+          TARGET_OWNER: ${{ secrets.SYNC_REPO_OWNER }}
+          TARGET_REPO: ${{ secrets.SYNC_REPO_NAME }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          
+          if [ -f "USAGE.md" ]; then
+            echo "Uploading USAGE.md..."
+            gh release upload "$TAG" USAGE.md --repo "$TARGET_OWNER/$TARGET_REPO" --clobber || true
+          else
+            echo "Warning: USAGE.md not found in repository root"
+          fi
+
+      - name: Verify release
+        env:
+          GITHUB_TOKEN: ${{ secrets.SYNC_REPO_TOKEN }}
+          TARGET_OWNER: ${{ secrets.SYNC_REPO_OWNER }}
+          TARGET_REPO: ${{ secrets.SYNC_REPO_NAME }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          echo "Verifying release $TAG in $TARGET_OWNER/$TARGET_REPO..."
+          gh release view "$TAG" --repo "$TARGET_OWNER/$TARGET_REPO"
+          echo "✅ Release created successfully!"
+
