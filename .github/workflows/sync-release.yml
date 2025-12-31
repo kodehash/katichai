@@ -1,54 +1,25 @@
-name: Release
+name: Sync Release to Public Repo
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g., v1.0.0)'
-        required: false
+        description: 'Release tag to sync (e.g., v1.0.0-alpha.6)'
+        required: true
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  sync-release:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          # For manual dispatch with tag input, checkout the tag
-          ref: ${{ github.event.inputs.tag || github.ref }}
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v5
-        with:
-          distribution: goreleaser
-          version: latest
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    needs: release
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
-    permissions:
-      contents: read
     steps:
       - name: Checkout source repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event.inputs.tag }}
 
       - name: Setup GitHub CLI
         run: |
@@ -57,14 +28,10 @@ jobs:
       - name: Extract tag name
         id: tag
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ github.event.inputs.tag }}" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG=${GITHUB_REF#refs/tags/}
-          fi
+          TAG="${{ github.event.inputs.tag }}"
           
           if [ -z "$TAG" ]; then
-            echo "Error: Could not extract tag name"
+            echo "Error: Tag is required"
             exit 1
           fi
           
@@ -84,6 +51,7 @@ jobs:
           
           if [ -z "$RELEASE_INFO" ] || [ "$RELEASE_INFO" == "null" ]; then
             echo "Error: Could not fetch release information for tag $TAG"
+            echo "Make sure the release exists in ${{ github.repository }}"
             exit 1
           fi
           
@@ -233,5 +201,4 @@ jobs:
           TAG="${{ steps.tag.outputs.tag }}"
           echo "Verifying release $TAG in $TARGET_OWNER/$TARGET_REPO..."
           gh release view "$TAG" --repo "$TARGET_OWNER/$TARGET_REPO"
-          echo "✅ Release created successfully!"
-
+          echo "✅ Release synced successfully!"
