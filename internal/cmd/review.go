@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/katichai/katich/internal/config"
 	"github.com/katichai/katich/internal/git"
@@ -385,6 +387,26 @@ func runReviewFull() error {
 	if err != nil {
 		return fmt.Errorf("failed to get repository files: %w", err)
 	}
+
+	// Confirmation prompt for full repository review
+	fmt.Println()
+	fmt.Println("⚠️  WARNING: Full Repository Review")
+	fmt.Println()
+	fmt.Println("Full repository review is not usually recommended.")
+	fmt.Println("Context is huge for a proper code review and your LLM token consumption will be very high.")
+	fmt.Println()
+	fmt.Print("Still want to continue? (y/N): ")
+	
+	scanner := bufio.NewScanner(os.Stdin)
+	if scanner.Scan() {
+		response := strings.TrimSpace(strings.ToLower(scanner.Text()))
+		if response != "y" && response != "yes" {
+			fmt.Println("\n❌ Full repository review cancelled.")
+			return nil
+		}
+	}
+	
+	fmt.Println()
 
 	// Run comprehensive full repository review
 	fmt.Println("🤖 Analyzing entire codebase with AI...")

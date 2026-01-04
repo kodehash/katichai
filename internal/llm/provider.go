@@ -1,6 +1,9 @@
 package llm
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // Role represents the role of a message sender
 type Role string
@@ -47,4 +50,30 @@ type LLMProvider interface {
 	
 	// GetModel returns the currently configured model
 	GetModel() string
+}
+
+// Provider-based token limits (simpler than per-model tracking)
+const (
+	OpenAITokenLimit    = 8192   // Conservative limit for OpenAI models
+	AnthropicTokenLimit = 200000 // Claude models support 200K context window
+	OllamaTokenLimit    = 8192   // Local models vary, use conservative default
+)
+
+// GetModelTokenLimit returns the token limit based on the provider
+// Accepts the model name and returns the appropriate provider-based limit
+func GetModelTokenLimit(model string) int {
+	modelLower := strings.ToLower(model)
+	
+	// Anthropic Claude models
+	if strings.Contains(modelLower, "claude") {
+		return AnthropicTokenLimit
+	}
+	
+	// OpenAI models (gpt-3.5, gpt-4, etc.)
+	if strings.Contains(modelLower, "gpt") {
+		return OpenAITokenLimit
+	}
+	
+	// Default to OpenAI limit for unknown models
+	return OpenAITokenLimit
 }

@@ -230,12 +230,26 @@ func (e *ReviewEngine) Review(diff *git.Diff, diffRange ...string) (*ReviewRepor
 	// 4. Build Review Context for LLM with sampled diff
 	diffString := sampledDiff.Format()
 	
+	// Truncate static issues and duplicate warnings to prevent token overflow
+	const MAX_STATIC_ISSUES = 15
+	const MAX_DUPLICATE_WARNINGS = 10
+	
+	truncatedStaticIssues := staticIssues
+	if len(truncatedStaticIssues) > MAX_STATIC_ISSUES {
+		truncatedStaticIssues = staticIssues[:MAX_STATIC_ISSUES]
+	}
+	
+	truncatedDuplicateWarnings := duplicateWarnings
+	if len(truncatedDuplicateWarnings) > MAX_DUPLICATE_WARNINGS {
+		truncatedDuplicateWarnings = duplicateWarnings[:MAX_DUPLICATE_WARNINGS]
+	}
+	
 	reviewCtx := llm.ReviewContext{
 		Diff:           diffString,
 		Frameworks:     []string{}, // TODO: Load from context.json if available
 		Languages:      detectLanguages(diff),
-		StaticIssues:   staticIssues,
-		SimilarCode:    duplicateWarnings,
+		StaticIssues:   truncatedStaticIssues,
+		SimilarCode:    truncatedDuplicateWarnings,
 		FileContext:    fmt.Sprintf("%s (Sampled: %d/%d files)", summarizeFiles(diff), samplingReport.SampledFiles, samplingReport.TotalFiles),
 		Classification: fmt.Sprintf("%s (Confidence: %.2f)", classification.Type, classification.Confidence),
 	}
@@ -243,7 +257,18 @@ func (e *ReviewEngine) Review(diff *git.Diff, diffRange ...string) (*ReviewRepor
 	// 5. Generate Prompt
 	prompt := e.pmtBuilder.BuildReviewPrompt(reviewCtx, false) // false = diff-based review
 	
-	// 5. Query LLM
+	// 5.5. Validate prompt size and determine if chunking is needed
+	modelLimit := llm.GetModelTokenLimit(e.llmClient.GetModel())
+	valid, totalTokens, validationErr := llm.ValidatePromptSize(llm.SystemPrompt, prompt, modelLimit, 1000)
+	
+	if !valid {
+		fmt.Printf("⚠️  Prompt size (%d tokens) exceeds model limit (%d tokens). Using chunked review...\n", totalTokens, modelLimit)
+		return e.performChunkedReview(diff, localResult, staticIssues, duplicateWarnings, &classification, sampledDiff, samplingReport, exactDupDetector)
+	}
+	
+	_ = validationErr // Suppress unused variable warning
+	
+	// 6. Query LLM
 	// We'll use a large context window for the review
 	fmt.Println("🤖 Querying LLM for review...")
 	resp, err := e.llmClient.GenerateCompletion(context.Background(), llm.CompletionRequest{
@@ -284,6 +309,221 @@ func (e *ReviewEngine) Review(diff *git.Diff, diffRange ...string) (*ReviewRepor
 		}
 	}
 
+	return report, nil
+}
+
+// ChunkResult represents the result of reviewing a single chunk
+type ChunkResult struct {
+	ChunkID      int
+	Content      string
+	InputTokens  int
+	OutputTokens int
+	Error        error
+}
+
+// buildChunkPrompt builds a review prompt for a single chunk
+func buildChunkPrompt(chunk *ReviewChunk) string {
+	var sb strings.Builder
+	
+	// Add chunk context
+	sb.WriteString(fmt.Sprintf("**CHUNK %d of %d** - This is part of a larger code review.\n\n", 
+		chunk.Context.ChunkNumber, chunk.Context.TotalChunks))
+	
+	sb.WriteString("Please review the following code changes in this chunk.\n\n")
+	
+	// Include context
+	sb.WriteString("### Repository Context\n")
+	if len(chunk.Context.Languages) > 0 {
+		sb.WriteString(fmt.Sprintf("- Languages: %s\n", strings.Join(chunk.Context.Languages, ", ")))
+	}
+	if len(chunk.Context.Frameworks) > 0 {
+		sb.WriteString(fmt.Sprintf("- Frameworks: %s\n", strings.Join(chunk.Context.Frameworks, ", ")))
+	}
+	if chunk.Context.Classification != "" {
+		sb.WriteString(fmt.Sprintf("- Classification: %s\n", chunk.Context.Classification))
+	}
+	sb.WriteString("\n")
+	
+	// Static issues for this chunk
+	if len(chunk.StaticIssues) > 0 {
+		sb.WriteString("### Static Analysis Findings (Verify these)\n")
+		for _, issue := range chunk.StaticIssues {
+			sb.WriteString(fmt.Sprintf("- [%s] %s (Line %d): %s\n", 
+				issue.Severity, issue.Type, issue.Line, issue.Message))
+		}
+		sb.WriteString("\n")
+	}
+	
+	// Duplication warnings for this chunk
+	if len(chunk.DuplicateWarnings) > 0 {
+		sb.WriteString("### Potential Duplication Detected\n")
+		for _, match := range chunk.DuplicateWarnings {
+			sb.WriteString(fmt.Sprintf("- %s\n", match))
+		}
+		sb.WriteString("\n")
+	}
+	
+	// Files in this chunk
+	sb.WriteString("### Code Changes\n")
+	for _, file := range chunk.Files {
+		sb.WriteString(fmt.Sprintf("\n**File: %s** (Status: %s, +%d -%d lines)\n", 
+			file.Path, file.Status, file.Additions, file.Deletions))
+		sb.WriteString("```diff\n")
+		sb.WriteString(file.Content)
+		sb.WriteString("\n```\n")
+	}
+	
+	sb.WriteString("\nProvide your review for this chunk following the standard format.\n")
+	sb.WriteString("\nNote: You are reviewing only a subset of changes. Focus on issues within this chunk.\n")
+	
+	return sb.String()
+}
+
+// performChunkedReview handles reviews that exceed token limits by splitting into chunks
+func (e *ReviewEngine) performChunkedReview(
+	diff *git.Diff,
+	localResult *ReviewResult,
+	staticIssues []analysis.Issue,
+	duplicateWarnings []string,
+	classification *llm.ClassificationResult,
+	sampledDiff *SampledDiff,
+	samplingReport *SamplingReport,
+	exactDupDetector *analysis.ExactDuplicationDetector,
+) (*ReviewReport, error) {
+	
+	// 1. Create chunks
+	modelLimit := llm.GetModelTokenLimit(e.llmClient.GetModel())
+	chunker := NewReviewChunker(
+		modelLimit,
+		1000, // buffer (reduced from 2000 to allow more content)
+	)
+	
+	frameworks := []string{} // TODO: Load from context.json if available
+	languages := detectLanguages(diff)
+	classificationStr := fmt.Sprintf("%s (Confidence: %.2f)", classification.Type, classification.Confidence)
+	
+	chunks, err := chunker.CreateChunks(sampledDiff, staticIssues, duplicateWarnings, frameworks, languages, classificationStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create chunks: %w", err)
+	}
+	
+	fmt.Printf("📦 Split into %d chunks for parallel review\n", len(chunks))
+	
+	// 2. Process chunks in parallel using goroutines
+	resultChan := make(chan ChunkResult, len(chunks))
+	
+	// Rate limiter: max concurrent requests (avoid API throttling)
+	maxConcurrent := 3
+	semaphore := make(chan struct{}, maxConcurrent)
+	
+	for _, chunk := range chunks {
+		// Acquire semaphore
+		semaphore <- struct{}{}
+		
+		go func(c *ReviewChunk) {
+			defer func() { <-semaphore }()
+			
+			fmt.Printf("🤖 Reviewing chunk %d/%d...\n", c.ID, len(chunks))
+			
+			chunkPrompt := buildChunkPrompt(c)
+			
+			// Calculate available tokens for completion
+			inputTokens := llm.EstimateTokens(llm.SystemPrompt) + llm.EstimateTokens(chunkPrompt)
+			maxOutputTokens := modelLimit - inputTokens - 500 // 500 buffer
+			
+			// Cap at reasonable maximum
+			if maxOutputTokens > 4096 {
+				maxOutputTokens = 4096
+			}
+			if maxOutputTokens < 512 {
+				maxOutputTokens = 512 // Minimum to provide useful response
+			}
+			
+			resp, err := e.llmClient.GenerateCompletion(context.Background(), llm.CompletionRequest{
+				Messages: []llm.Message{
+					{Role: llm.RoleSystem, Content: llm.SystemPrompt},
+					{Role: llm.RoleUser, Content: chunkPrompt},
+				},
+				Temperature: 0.2,
+				MaxTokens:   maxOutputTokens,
+			})
+			
+			result := ChunkResult{ChunkID: c.ID}
+			if err != nil {
+				result.Error = fmt.Errorf("chunk %d review failed: %w", c.ID, err)
+			} else {
+				result.Content = resp.Content
+				result.InputTokens = resp.Usage.PromptTokens
+				result.OutputTokens = resp.Usage.CompletionTokens
+			}
+			
+			resultChan <- result
+		}(chunk)
+	}
+	
+	// Wait for all goroutines to complete
+	results := make([]ChunkResult, 0, len(chunks))
+	for i := 0; i < len(chunks); i++ {
+		result := <-resultChan
+		if result.Error != nil {
+			// Close semaphore and channel
+			close(resultChan)
+			return nil, result.Error
+		}
+		results = append(results, result)
+	}
+	close(resultChan)
+	
+	// Sort results by chunk ID to maintain order
+	// Using a simple bubble sort since the list is likely small
+	for i := 0; i < len(results)-1; i++ {
+		for j := 0; j < len(results)-i-1; j++ {
+			if results[j].ChunkID > results[j+1].ChunkID {
+				results[j], results[j+1] = results[j+1], results[j]
+			}
+		}
+	}
+	
+	// Extract responses in order
+	var allResponses []string
+	var totalInputTokens, totalOutputTokens int
+	for _, result := range results {
+		allResponses = append(allResponses, result.Content)
+		totalInputTokens += result.InputTokens
+		totalOutputTokens += result.OutputTokens
+	}
+	
+	// 3. Merge chunk results
+	fmt.Println("🔄 Merging chunk results...")
+	mergedContent := e.mergeChunkResults(allResponses)
+	
+	// 4. Filter LLM output to only issues related to actual code changes
+	filteredLLMOutput := e.filterLLMOutputToChanges(mergedContent, diff, localResult.FileAnalysis)
+	
+	// 5. Synthesize final report
+	tokenUsage := TokenUsage{
+		InputTokens:  totalInputTokens,
+		OutputTokens: totalOutputTokens,
+		TotalTokens:  totalInputTokens + totalOutputTokens,
+	}
+	
+	report := e.synthesizer.Synthesize(filteredLLMOutput, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage)
+	
+	// 6. Populate sampling information
+	e.populateSamplingInfo(report, diff, sampledDiff, samplingReport)
+	
+	// 7. Populate duplicate blocks and AI patterns for HTML report
+	e.populateDuplicateBlocks(report, exactDupDetector, localResult, diff)
+	e.populateAIPatterns(report, localResult, diff)
+	
+	// 8. Generate HTML report if enabled
+	if e.shouldGenerateHTML() {
+		if err := e.generateHTMLReport(report, diff, e.diffRange); err != nil {
+			// Log error but don't fail the review
+			fmt.Printf("Warning: Failed to generate HTML report: %v\n", err)
+		}
+	}
+	
 	return report, nil
 }
 
@@ -403,12 +643,28 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 	// 4. Build Review Context for LLM with sampled diff
 	diffString := sampledDiff.Format()
 
+	// Truncate static issues and duplicate warnings to prevent information overload
+	// Use higher limits for full repo reviews since we have more token capacity
+	const MAX_STATIC_ISSUES_FULL_REPO = 30
+	const MAX_DUPLICATE_WARNINGS_FULL_REPO = 20
+	
+	truncatedStaticIssues := staticIssues
+	if len(truncatedStaticIssues) > MAX_STATIC_ISSUES_FULL_REPO {
+		// Prioritize high-severity issues
+		truncatedStaticIssues = prioritizeIssues(staticIssues, MAX_STATIC_ISSUES_FULL_REPO)
+	}
+	
+	truncatedDuplicateWarnings := duplicateWarnings
+	if len(truncatedDuplicateWarnings) > MAX_DUPLICATE_WARNINGS_FULL_REPO {
+		truncatedDuplicateWarnings = duplicateWarnings[:MAX_DUPLICATE_WARNINGS_FULL_REPO]
+	}
+
 	reviewCtx := llm.ReviewContext{
 		Diff:           diffString,
 		Frameworks:     []string{}, // TODO: Load from context.json if available
 		Languages:      detectLanguages(diff),
-		StaticIssues:   staticIssues,
-		SimilarCode:    duplicateWarnings,
+		StaticIssues:   truncatedStaticIssues,
+		SimilarCode:    truncatedDuplicateWarnings,
 		FileContext:    fmt.Sprintf("Full repository review: %d files (Sampled: %d/%d files)", len(diff.Files), samplingReport.SampledFiles, samplingReport.TotalFiles),
 		Classification: fmt.Sprintf("%s (Confidence: %.2f)", classification.Type, classification.Confidence),
 	}
@@ -418,15 +674,15 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 
 	// 6. Query LLM
 	fmt.Println("🤖 Querying LLM for comprehensive repository review...")
-	// No limit for full repository reviews to ensure all issues are captured
-	// Setting to 0 means no limit (providers will handle appropriately)
+	// Use high token limit for full repository reviews to ensure all issues are captured
+	// MaxTokens=0 tells providers to use their max (Anthropic: 32768, OpenAI: handled by provider)
 	resp, err := e.llmClient.GenerateCompletion(context.Background(), llm.CompletionRequest{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: llm.SystemPrompt},
 			{Role: llm.RoleUser, Content: prompt},
 		},
 		Temperature: 0.2,
-		MaxTokens:   0, // No limit for full repository reviews
+		MaxTokens:   0, // No limit - let provider use max tokens for comprehensive output
 	})
 	if err != nil {
 		return nil, fmt.Errorf("LLM review failed: %w", err)
@@ -488,6 +744,56 @@ func formatDiff(diff *git.Diff) string {
 		}
 	}
 	return sb.String()
+}
+
+// prioritizeIssues sorts issues by severity and returns the top N
+// Priority order: Error > Warning > Info
+func prioritizeIssues(issues []analysis.Issue, maxCount int) []analysis.Issue {
+	if len(issues) <= maxCount {
+		return issues
+	}
+	
+	// Separate by severity
+	var errors, warnings, infos []analysis.Issue
+	for _, issue := range issues {
+		switch strings.ToLower(string(issue.Severity)) {
+		case "error", "critical", "high":
+			errors = append(errors, issue)
+		case "warning", "medium":
+			warnings = append(warnings, issue)
+		default:
+			infos = append(infos, issue)
+		}
+	}
+	
+	// Build prioritized list
+	prioritized := make([]analysis.Issue, 0, maxCount)
+	
+	// Add all errors first
+	for _, issue := range errors {
+		if len(prioritized) >= maxCount {
+			break
+		}
+		prioritized = append(prioritized, issue)
+	}
+	
+	// Then warnings
+	for _, issue := range warnings {
+		if len(prioritized) >= maxCount {
+			break
+		}
+		prioritized = append(prioritized, issue)
+	}
+	
+	// Finally infos
+	for _, issue := range infos {
+		if len(prioritized) >= maxCount {
+			break
+		}
+		prioritized = append(prioritized, issue)
+	}
+	
+	return prioritized
 }
 
 func detectLanguages(diff *git.Diff) []string {

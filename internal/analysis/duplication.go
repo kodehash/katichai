@@ -34,6 +34,12 @@ func (d *ExactDuplicationDetector) AddFunction(file string, fn FunctionInfo) {
 		return
 	}
 	
+	// Skip functions with less than 4 lines of code (too small to be meaningful duplicates)
+	lineCount := countNonEmptyLines(fn.Body)
+	if lineCount < 4 {
+		return
+	}
+	
 	// Normalize: remove whitespace to catch formatting differences
 	hash := computeCodeHash(fn.Body)
 	
@@ -70,4 +76,17 @@ func computeCodeHash(code string) string {
 // GetDuplicates returns all found duplicates
 func (d *ExactDuplicationDetector) GetDuplicates() map[string][]DuplicateLocation {
 	return d.hashes
+}
+
+// countNonEmptyLines counts the number of non-empty lines in code
+func countNonEmptyLines(code string) int {
+	lines := strings.Split(code, "\n")
+	count := 0
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && trimmed != "{" && trimmed != "}" {
+			count++
+		}
+	}
+	return count
 }

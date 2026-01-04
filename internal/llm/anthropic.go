@@ -27,7 +27,7 @@ func NewAnthropicProvider(apiKey string, model string) *AnthropicProvider {
 	return &AnthropicProvider{
 		apiKey:  apiKey,
 		model:   model,
-		client:  &http.Client{Timeout: 60 * time.Second},
+		client:  &http.Client{Timeout: 180 * time.Second}, // 3 minutes for large context reviews
 		baseURL: "https://api.anthropic.com/v1/messages",
 	}
 }
@@ -74,7 +74,7 @@ func (p *AnthropicProvider) GenerateCompletion(ctx context.Context, req Completi
 	// Set headers
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", p.apiKey)
-	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	httpReq.Header.Set("anthropic-version", "2023-06-01") // Compatible with all Claude 3 models including 3.5
 
 	// Send request
 	resp, err := p.client.Do(httpReq)

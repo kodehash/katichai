@@ -206,6 +206,8 @@ func (p *PromptBuilder) BuildReviewPrompt(ctx ReviewContext, isFullRepository ..
 		sb.WriteString("**Review Type**: Full Repository Review\n")
 		sb.WriteString("This is a comprehensive analysis of the entire codebase, not just changes.\n")
 		sb.WriteString("Focus on overall architecture, patterns, consistency, and code quality across the repository.\n\n")
+		sb.WriteString("**CRITICAL**: Prioritize reporting all security vulnerabilities, critical bugs, and architectural violations.\n")
+		sb.WriteString("Ensure you systematically check the security checklist for ALL sampled files.\n\n")
 	} else {
 		sb.WriteString("Please review the following code changes.\n\n")
 	}
@@ -287,6 +289,90 @@ func (p *PromptBuilder) BuildReviewPrompt(ctx ReviewContext, isFullRepository ..
 	sb.WriteString("\n4. Memory Leaks & Optimization: Detect resource leaks, inefficient algorithms, performance bottlenecks")
 	sb.WriteString("\n5. Impact Analysis: Assess downstream effects, migration requirements, breaking changes")
 	sb.WriteString("\n\nCRITICAL: Report each security vulnerability ONCE with specific location (file:line). Do not duplicate findings.")
+	
+	return sb.String()
+}
+
+// ReviewChunk represents a chunk of a review (needs to be defined or imported)
+// This is a simplified version for the prompt builder
+type ReviewChunk struct {
+	ID                int
+	Context           ChunkContext
+	StaticIssues      []analysis.Issue
+	DuplicateWarnings []string
+	Files             []ChunkFile
+}
+
+type ChunkContext struct {
+	ChunkNumber    int
+	TotalChunks    int
+	Languages      []string
+	Frameworks     []string
+	Classification string
+}
+
+type ChunkFile struct {
+	Path      string
+	Status    string
+	Additions int
+	Deletions int
+	Content   string
+}
+
+// BuildChunkReviewPrompt constructs a prompt for reviewing a single chunk
+func (p *PromptBuilder) BuildChunkReviewPrompt(chunk *ReviewChunk) string {
+	var sb strings.Builder
+	
+	// Add chunk context
+	sb.WriteString(fmt.Sprintf("**CHUNK %d of %d** - This is part of a larger code review.\n\n", 
+		chunk.Context.ChunkNumber, chunk.Context.TotalChunks))
+	
+	sb.WriteString("Please review the following code changes in this chunk.\n\n")
+	
+	// Include context
+	sb.WriteString("### Repository Context\n")
+	if len(chunk.Context.Languages) > 0 {
+		sb.WriteString(fmt.Sprintf("- Languages: %s\n", strings.Join(chunk.Context.Languages, ", ")))
+	}
+	if len(chunk.Context.Frameworks) > 0 {
+		sb.WriteString(fmt.Sprintf("- Frameworks: %s\n", strings.Join(chunk.Context.Frameworks, ", ")))
+	}
+	if chunk.Context.Classification != "" {
+		sb.WriteString(fmt.Sprintf("- Classification: %s\n", chunk.Context.Classification))
+	}
+	sb.WriteString("\n")
+	
+	// Static issues for this chunk
+	if len(chunk.StaticIssues) > 0 {
+		sb.WriteString("### Static Analysis Findings (Verify these)\n")
+		for _, issue := range chunk.StaticIssues {
+			sb.WriteString(fmt.Sprintf("- [%s] %s (Line %d): %s\n", 
+				issue.Severity, issue.Type, issue.Line, issue.Message))
+		}
+		sb.WriteString("\n")
+	}
+	
+	// Duplication warnings for this chunk
+	if len(chunk.DuplicateWarnings) > 0 {
+		sb.WriteString("### Potential Duplication Detected\n")
+		for _, match := range chunk.DuplicateWarnings {
+			sb.WriteString(fmt.Sprintf("- %s\n", match))
+		}
+		sb.WriteString("\n")
+	}
+	
+	// Files in this chunk
+	sb.WriteString("### Code Changes\n")
+	for _, file := range chunk.Files {
+		sb.WriteString(fmt.Sprintf("\n**File: %s** (Status: %s, +%d -%d lines)\n", 
+			file.Path, file.Status, file.Additions, file.Deletions))
+		sb.WriteString("```diff\n")
+		sb.WriteString(file.Content)
+		sb.WriteString("\n```\n")
+	}
+	
+	sb.WriteString("\nProvide your review for this chunk following the standard format.\n")
+	sb.WriteString("\nNote: You are reviewing only a subset of changes. Focus on issues within this chunk.\n")
 	
 	return sb.String()
 }

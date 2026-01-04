@@ -27,7 +27,7 @@ func NewOpenAIProvider(apiKey string, model string) *OpenAIProvider {
 	return &OpenAIProvider{
 		apiKey:  apiKey,
 		model:   model,
-		client:  &http.Client{Timeout: 60 * time.Second},
+		client:  &http.Client{Timeout: 120 * time.Second}, // 2 minutes for reviews
 		baseURL: "https://api.openai.com/v1/chat/completions",
 	}
 }
