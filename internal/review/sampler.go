@@ -333,6 +333,7 @@ func (s *DiffSampler) sampleFile(file *git.DiffFile, analysis *analysispkg.FileA
 	}
 	
 	totalChanges := file.Additions + file.Deletions
+	isPython := strings.HasSuffix(file.Path, ".py")
 	
 	// For very large files, use signature extraction
 	if totalChanges > LARGE_FILE_THRESHOLD && analysis != nil {
@@ -343,7 +344,13 @@ func (s *DiffSampler) sampleFile(file *git.DiffFile, analysis *analysispkg.FileA
 	
 	// For normal files, reduce context
 	if file.Patch != "" {
-		sampled.Content = s.reduceContext(file.Patch)
+		if isPython {
+			// Python-specific optimization: more aggressive context reduction
+			// Python's indentation makes diffs more verbose
+			sampled.Content = s.reduceContextPython(file.Patch)
+		} else {
+			sampled.Content = s.reduceContext(file.Patch)
+		}
 	}
 	
 	// Check if still too large
@@ -388,6 +395,53 @@ func (s *DiffSampler) reduceContext(patch string) string {
 			
 			// Include context after change (up to contextLines)
 			end := min(len(lines), i+s.contextLines+1)
+			for j := i + 1; j < end && j < len(lines); j++ {
+				if !strings.HasPrefix(lines[j], "+") && !strings.HasPrefix(lines[j], "-") {
+					reduced = append(reduced, lines[j])
+					lastIncluded = j
+				} else {
+					break
+				}
+			}
+		}
+	}
+	
+	return strings.Join(reduced, "\n")
+}
+
+// reduceContextPython reduces context for Python files more aggressively
+// Python's indentation-based syntax makes diffs more verbose
+func (s *DiffSampler) reduceContextPython(patch string) string {
+	lines := strings.Split(patch, "\n")
+	reduced := make([]string, 0)
+	
+	lastIncluded := -1000
+	pythonContextLines := 1 // Reduced from 2 to 1 for Python
+	
+	for i, line := range lines {
+		// Always include diff headers
+		if strings.HasPrefix(line, "@@") || strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---") {
+			reduced = append(reduced, line)
+			lastIncluded = i
+			continue
+		}
+		
+		// Include changed lines and minimal context
+		if strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-") {
+			// Include minimal context before change (1 line for Python)
+			start := max(lastIncluded+1, i-pythonContextLines)
+			for j := start; j < i; j++ {
+				if j > lastIncluded {
+					reduced = append(reduced, lines[j])
+				}
+			}
+			
+			// Include the change
+			reduced = append(reduced, line)
+			lastIncluded = i
+			
+			// Include minimal context after change (1 line for Python)
+			end := min(len(lines), i+pythonContextLines+1)
 			for j := i + 1; j < end && j < len(lines); j++ {
 				if !strings.HasPrefix(lines[j], "+") && !strings.HasPrefix(lines[j], "-") {
 					reduced = append(reduced, lines[j])

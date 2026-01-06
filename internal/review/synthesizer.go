@@ -97,7 +97,10 @@ func (s *Synthesizer) Synthesize(llmOutput string, staticIssues []analysis.Issue
 	// 1. Parse LLM Output
 	s.parseLLMOutput(llmOutput, report)
 
-	// 1.5. Deduplicate security issues
+	// 1.5. Check for summary/issues mismatch and warn
+	s.checkSummaryIssuesMismatch(report, llmOutput)
+
+	// 1.6. Deduplicate security issues
 	s.deduplicateSecurityIssues(report)
 
 	// 2. Incorporate Static Analysis
@@ -281,18 +284,89 @@ func (s *Synthesizer) parseLLMOutput(output string, report *ReviewReport) {
 	}
 
 	// Extract Critical Issues
-	issuesRe := regexp.MustCompile(`(?s)## Critical Issues.*?\n(.*?)(##|$)`)
-	if match := issuesRe.FindStringSubmatch(output); len(match) > 1 {
-		lines := strings.Split(match[1], "\n")
-		for _, line := range lines {
+	// Try multiple variations of the section header to be more robust
+	// Pattern 1: "## Critical Issues" or "## Critical Issues (Blockers)" with optional whitespace
+	// Note: Go regexp doesn't support lookahead, so we use a simpler pattern
+	issuesRe := regexp.MustCompile(`(?s)##\s*Critical Issues[^\n]*\n(.*?)(\n##|$)`)
+	match := issuesRe.FindStringSubmatch(output)
+	
+	// Fallback: Try without requiring newline after header (in case LLM doesn't add one)
+	if len(match) < 2 {
+		issuesRe = regexp.MustCompile(`(?s)##\s*Critical Issues[^\n]*(.*?)(\n##|$)`)
+		match = issuesRe.FindStringSubmatch(output)
+	}
+	
+	if len(match) > 1 {
+		criticalSection := match[1]
+		// Debug: log what we extracted
+		if len(strings.TrimSpace(criticalSection)) < 50 {
+			fmt.Printf("🔍 Debug: Critical Issues section content: %q\n", strings.TrimSpace(criticalSection))
+		}
+		
+		lines := strings.Split(criticalSection, "\n")
+		parsedCount := 0
+		skippedCount := 0
+		multiLineIssueCount := 0
+		
+		// State machine to handle multi-line issue descriptions
+		var currentIssue *ReviewIssue
+		var currentIssueHasContinuation bool = false
+		totalLines := len(lines)
+		
+		for i, line := range lines {
 			line = strings.TrimSpace(line)
+			
+			// Check if this is a new section header (shouldn't happen, but be safe)
+			if strings.HasPrefix(line, "##") {
+				// Save current issue if exists
+				if currentIssue != nil {
+					// Finalize the current issue
+					location := s.extractLocation(currentIssue.Description)
+					if location != "" {
+						currentIssue.Location = location
+					}
+					report.Issues = append(report.Issues, *currentIssue)
+					parsedCount++
+					currentIssue = nil
+				}
+				break
+			}
+			
+			// Check if this is a new issue (starts with "-")
 			if strings.HasPrefix(line, "-") {
-				// Parse issue line: "- [CATEGORY] Description"
+				// Save previous issue if exists
+				if currentIssue != nil {
+					// Finalize the previous issue
+					location := s.extractLocation(currentIssue.Description)
+					if location != "" {
+						currentIssue.Location = location
+					}
+					
+					// Skip if description is "None" or empty (LLM indicating no issues)
+					descLower := strings.ToLower(strings.TrimSpace(currentIssue.Description))
+					if currentIssue.Description == "" || descLower == "none" || descLower == "none." || 
+					   strings.HasPrefix(descLower, "none.") || strings.HasPrefix(descLower, "no issues") {
+						skippedCount++
+						currentIssue = nil
+						currentIssueHasContinuation = false
+					} else {
+						// Track if this issue had multi-line description
+						if currentIssueHasContinuation {
+							multiLineIssueCount++
+						}
+						report.Issues = append(report.Issues, *currentIssue)
+						parsedCount++
+						currentIssue = nil
+						currentIssueHasContinuation = false
+					}
+				}
+				
+				// Parse new issue line: "- [CATEGORY] Description"
 				trimmed := strings.TrimPrefix(line, "- ")
 				category := "GENERAL"
 				desc := trimmed
 
-				if string(trimmed[0]) == "[" {
+				if len(trimmed) > 0 && string(trimmed[0]) == "[" {
 					endIdx := strings.Index(trimmed, "]")
 					if endIdx > 0 {
 						category = trimmed[1:endIdx]
@@ -304,31 +378,131 @@ func (s *Synthesizer) parseLLMOutput(output string, report *ReviewReport) {
 				descLower := strings.ToLower(desc)
 				if desc == "" || descLower == "none" || descLower == "none." || 
 				   strings.HasPrefix(descLower, "none.") || strings.HasPrefix(descLower, "no issues") {
+					skippedCount++
+					currentIssue = nil
 					continue
 				}
-
-				// Extract location from description if present (format: "file.go:123" or "in file.go:123")
-				location := s.extractLocation(desc)
 				
-				report.Issues = append(report.Issues, ReviewIssue{
+				// Start new issue
+				currentIssue = &ReviewIssue{
 					Category:    category,
 					Severity:    "CRITICAL", // Assuming critical section
 					Description: desc,
-					Location:    location,
-				})
-				
-				// Apply category-based penalties (commented out - scoring is subjective)
-				// switch strings.ToUpper(category) {
-				// case "SECURITY":
-				// 	report.Score -= 20 // Security issues are critical
-				// case "ARCHITECTURE":
-				// 	report.Score -= 5 // Architectural issues
-				// case "PERFORMANCE":
-				// 	report.Score -= 10 // Performance issues
-				// default:
-				// 	report.Score -= 10 // Other critical issues
-				// }
+					Location:    "", // Will be extracted after accumulating all lines
+				}
+				currentIssueHasContinuation = false
+			} else if currentIssue != nil {
+				// This is a continuation line for the current issue
+				if line != "" {
+					// Accumulate the continuation line
+					if currentIssue.Description != "" {
+						currentIssue.Description += " " + line
+					} else {
+						currentIssue.Description = line
+					}
+					currentIssueHasContinuation = true
+				} else {
+					// Empty line - check if next line is a new issue or section
+					// If next line is empty or starts with "-" or "##", finalize current issue
+					if i+1 < totalLines {
+						nextLine := strings.TrimSpace(lines[i+1])
+						if nextLine == "" || strings.HasPrefix(nextLine, "-") || strings.HasPrefix(nextLine, "##") {
+							// Finalize current issue
+							location := s.extractLocation(currentIssue.Description)
+							if location != "" {
+								currentIssue.Location = location
+							}
+							
+							descLower := strings.ToLower(strings.TrimSpace(currentIssue.Description))
+							if currentIssue.Description == "" || descLower == "none" || descLower == "none." || 
+							   strings.HasPrefix(descLower, "none.") || strings.HasPrefix(descLower, "no issues") {
+								skippedCount++
+							} else {
+								// Track if this issue had multi-line description
+								if currentIssueHasContinuation {
+									multiLineIssueCount++
+								}
+								report.Issues = append(report.Issues, *currentIssue)
+								parsedCount++
+							}
+							currentIssue = nil
+							currentIssueHasContinuation = false
+						}
+						// Otherwise, continue accumulating (empty line is part of description)
+					}
+				}
 			}
+		}
+		
+		// Don't forget the last issue if we were still building one
+		if currentIssue != nil {
+			location := s.extractLocation(currentIssue.Description)
+			if location != "" {
+				currentIssue.Location = location
+			}
+			
+			descLower := strings.ToLower(strings.TrimSpace(currentIssue.Description))
+			if currentIssue.Description == "" || descLower == "none" || descLower == "none." || 
+			   strings.HasPrefix(descLower, "none.") || strings.HasPrefix(descLower, "no issues") {
+				skippedCount++
+			} else {
+				// Track if this issue had multi-line description
+				if currentIssueHasContinuation {
+					multiLineIssueCount++
+				}
+				report.Issues = append(report.Issues, *currentIssue)
+				parsedCount++
+			}
+		}
+		
+		// Debug: log parsing results
+		if parsedCount == 0 && skippedCount > 0 {
+			fmt.Printf("⚠️  Warning: Found %d critical issue lines but all were skipped (likely 'None' or empty)\n", skippedCount)
+		} else if parsedCount > 0 {
+			fmt.Printf("✅ Parsed %d critical issues from LLM output", parsedCount)
+			if multiLineIssueCount > 0 {
+				fmt.Printf(" (%d issues had multi-line descriptions)", multiLineIssueCount)
+			}
+			fmt.Printf("\n")
+		} else if parsedCount == 0 && totalLines > 5 {
+			// Warn if section had content but nothing was parsed (might indicate parsing issue)
+			fmt.Printf("⚠️  Warning: Critical Issues section had %d lines but no issues were parsed. This may indicate a parsing issue or LLM output format problem.\n", totalLines)
+			// Show a sample of what was found for debugging
+			if len(criticalSection) > 0 {
+				sampleLen := len(criticalSection)
+				if sampleLen > 200 {
+					sampleLen = 200
+				}
+				fmt.Printf("   🔍 Sample content: %q\n", strings.TrimSpace(criticalSection[:sampleLen]))
+			}
+		}
+	} else {
+		// Try to find alternative section headers
+		altPatterns := []string{
+			`##\s*Critical\s+Issues\s*\(Blockers\)`,
+			`##\s*Critical\s+Issues`,
+			`##\s*Issues`,
+			`##\s*Blockers`,
+		}
+		
+		foundAlt := false
+		for _, pattern := range altPatterns {
+			// Go regexp doesn't support lookahead, use simpler pattern
+			altRe := regexp.MustCompile(`(?s)` + pattern + `[^\n]*\n(.*?)(\n##|$)`)
+			if altMatch := altRe.FindStringSubmatch(output); len(altMatch) > 1 {
+				previewLen := len(altMatch[1])
+				if previewLen > 200 {
+					previewLen = 200
+				}
+				fmt.Printf("⚠️  Warning: Found section matching pattern '%s' but it wasn't parsed. Content preview: %q\n", 
+					pattern, strings.TrimSpace(altMatch[1][:previewLen]))
+				foundAlt = true
+				break
+			}
+		}
+		
+		if !foundAlt {
+			fmt.Printf("⚠️  Warning: Could not find '## Critical Issues' section in LLM output\n")
 		}
 	}
 
@@ -379,6 +553,112 @@ func (s *Synthesizer) extractLocation(description string) string {
 }
 
 // deduplicateSecurityIssues removes duplicate security findings
+// checkSummaryIssuesMismatch detects when Summary mentions issues but Critical Issues section is empty
+func (s *Synthesizer) checkSummaryIssuesMismatch(report *ReviewReport, llmOutput string) {
+	// Count non-static issues (critical issues)
+	criticalCount := 0
+	for _, issue := range report.Issues {
+		if issue.Category != "STATIC_ANALYSIS" && issue.Severity == "CRITICAL" {
+			criticalCount++
+		}
+	}
+	
+	// Check if summary mentions critical issues
+	summaryLower := strings.ToLower(report.Summary)
+	mentionsIssues := false
+	issueKeywords := []string{
+		"critical", "vulnerability", "vulnerabilities", "security", 
+		"architectural violation", "breaking", "severe",
+	}
+	
+	for _, keyword := range issueKeywords {
+		if strings.Contains(summaryLower, keyword) {
+			mentionsIssues = true
+			break
+		}
+	}
+	
+	// If summary mentions issues but we have none, try to extract from summary
+	if mentionsIssues && criticalCount == 0 {
+		// Try to extract issues from the summary itself as a fallback
+		// Look for patterns like "X security vulnerabilities" or "critical issues in file.go"
+		s.tryExtractIssuesFromSummary(report.Summary, report)
+	}
+}
+
+// tryExtractIssuesFromSummary attempts to extract critical issues from the summary text
+// Returns true if any issues were extracted
+func (s *Synthesizer) tryExtractIssuesFromSummary(summary string, report *ReviewReport) bool {
+	// Look for file:line patterns in the summary
+	locationRe := regexp.MustCompile(`([a-zA-Z0-9_\-./\\]+\.(go|java|js|ts|py|rs|cpp|c|h|hpp)):(\d+)`)
+	matches := locationRe.FindAllStringSubmatch(summary, -1)
+	
+	if len(matches) == 0 {
+		return false
+	}
+	
+	// Try to extract sentences that mention issues with file locations
+	lines := strings.Split(summary, ".")
+	extractedCount := 0
+	
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		
+		// Check if this line mentions a critical issue keyword and has a file location
+		lineLower := strings.ToLower(line)
+		hasKeyword := false
+		category := "GENERAL"
+		
+		if strings.Contains(lineLower, "security") || strings.Contains(lineLower, "vulnerability") {
+			hasKeyword = true
+			category = "SECURITY"
+		} else if strings.Contains(lineLower, "architectural") || strings.Contains(lineLower, "architecture") {
+			hasKeyword = true
+			category = "ARCHITECTURE"
+		} else if strings.Contains(lineLower, "performance") {
+			hasKeyword = true
+			category = "PERFORMANCE"
+		} else if strings.Contains(lineLower, "breaking") {
+			hasKeyword = true
+			category = "BREAKING"
+		} else if strings.Contains(lineLower, "critical") {
+			hasKeyword = true
+		}
+		
+		if hasKeyword {
+			// Check if this line has a file location
+			locationMatch := locationRe.FindStringSubmatch(line)
+			if len(locationMatch) > 0 {
+				location := fmt.Sprintf("%s:%s", locationMatch[1], locationMatch[3])
+				
+				// Extract the issue description (limit to reasonable length)
+				desc := line
+				if len(desc) > 200 {
+					desc = desc[:200] + "..."
+				}
+				
+				report.Issues = append(report.Issues, ReviewIssue{
+					Category:    category,
+					Severity:    "CRITICAL",
+					Description: desc,
+					Location:    location,
+				})
+				extractedCount++
+			}
+		}
+	}
+	
+	if extractedCount > 0 {
+		fmt.Printf("📝 Extracted %d critical issue(s) from summary text (issues were mentioned in summary but not in Critical Issues section)\n", extractedCount)
+		return true
+	}
+	
+	return false
+}
+
 func (s *Synthesizer) deduplicateSecurityIssues(report *ReviewReport) {
 	// Separate security issues from others
 	securityIssues := make([]ReviewIssue, 0)

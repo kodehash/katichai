@@ -156,7 +156,7 @@ Output your review in the following Markdown format:
 - [BREAKING] Details of the issue with specific location and impact...
 
 ## Suggestions
-- Details of improvements...
+- Details of improvements (code quality, refactoring opportunities, best practices)...
 
 ## Unnecessary Complexity
 - [COMPLEXITY] file.go:123 - Function: functionName - Score: 75/100
@@ -206,8 +206,14 @@ func (p *PromptBuilder) BuildReviewPrompt(ctx ReviewContext, isFullRepository ..
 		sb.WriteString("**Review Type**: Full Repository Review\n")
 		sb.WriteString("This is a comprehensive analysis of the entire codebase, not just changes.\n")
 		sb.WriteString("Focus on overall architecture, patterns, consistency, and code quality across the repository.\n\n")
-		sb.WriteString("**CRITICAL**: Prioritize reporting all security vulnerabilities, critical bugs, and architectural violations.\n")
-		sb.WriteString("Ensure you systematically check the security checklist for ALL sampled files.\n\n")
+		sb.WriteString("**CRITICAL INSTRUCTIONS FOR FULL REPO REVIEW**:\n")
+		sb.WriteString("1. Systematically check the security checklist for ALL sampled files\n")
+		sb.WriteString("2. List ALL critical issues in the \"## Critical Issues (Blockers)\" section as separate bullet points\n")
+		sb.WriteString("3. Include specific file:line locations for each issue (format: file.py:123)\n")
+		sb.WriteString("4. Use [SECURITY], [ARCHITECTURE], [PERFORMANCE], or [BREAKING] category tags\n")
+		sb.WriteString("5. Provide actionable suggestions in the \"## Suggestions\" section\n")
+		sb.WriteString("6. If you mention issue counts in the Summary (e.g., \"9 security vulnerabilities\"), you MUST list each one individually in the Critical Issues section\n")
+		sb.WriteString("7. Do NOT just summarize - provide specific, actionable details for every issue\n\n")
 	} else {
 		sb.WriteString("Please review the following code changes.\n\n")
 	}

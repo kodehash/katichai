@@ -234,6 +234,8 @@ func (s *RepositorySampler) sampleFile(file *git.DiffFile, analysis *analysispkg
 		Deletions: file.Deletions,
 	}
 
+	isPython := strings.HasSuffix(file.Path, ".py")
+
 	// For full repository review, we include full file content
 	// but truncate if it exceeds token budget
 	if file.Patch != "" {
@@ -250,6 +252,11 @@ func (s *RepositorySampler) sampleFile(file *git.DiffFile, analysis *analysispkg
 			}
 		}
 		sampled.Content = content.String()
+		
+		// Python-specific optimization: remove excessive blank lines and docstrings
+		if isPython {
+			sampled.Content = s.optimizePythonContent(sampled.Content)
+		}
 	}
 
 	// Check if still too large
@@ -261,5 +268,47 @@ func (s *RepositorySampler) sampleFile(file *git.DiffFile, analysis *analysispkg
 	}
 
 	return sampled
+}
+
+// optimizePythonContent optimizes Python content to reduce token usage
+func (s *RepositorySampler) optimizePythonContent(content string) string {
+	lines := strings.Split(content, "\n")
+	optimized := make([]string, 0)
+	skipBlankLines := 0
+	
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		
+		// Skip excessive consecutive blank lines (keep max 1)
+		if trimmed == "" {
+			skipBlankLines++
+			if skipBlankLines <= 1 {
+				optimized = append(optimized, line)
+			}
+			continue
+		}
+		skipBlankLines = 0
+		
+		// Truncate very long docstrings (keep first 3 lines max)
+		if strings.HasPrefix(trimmed, `"""`) || strings.HasPrefix(trimmed, `'''`) {
+			quote := `"""`
+			if strings.HasPrefix(trimmed, `'''`) {
+				quote = `'''`
+			}
+			
+			// Check if this is a single-line docstring
+			if strings.HasSuffix(trimmed, quote) && len(trimmed) > 6 {
+				// Single line docstring - truncate if too long
+				if len(trimmed) > 200 {
+					optimized = append(optimized, quote+trimmed[len(quote):200]+"... [truncated]"+quote)
+					continue
+				}
+			}
+		}
+		
+		optimized = append(optimized, line)
+	}
+	
+	return strings.Join(optimized, "\n")
 }
 

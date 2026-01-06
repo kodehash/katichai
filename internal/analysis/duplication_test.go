@@ -7,18 +7,28 @@ import (
 func TestExactDuplication(t *testing.T) {
 	detector := NewExactDuplicationDetector()
 
+	// Functions must have at least 4 lines to be considered for duplication
 	fn1 := FunctionInfo{
 		Name:      "FuncA",
 		StartLine: 10,
 		EndLine:   20,
-		Body:      "func A() { print('hello') }",
+		Body: `func A() {
+	x := 1
+	y := 2
+	z := 3
+	return x + y + z
+}`,
 	}
 
 	fn2 := FunctionInfo{
 		Name:      "FuncB",
 		StartLine: 30,
 		EndLine:   40,
-		Body:      "func B() { print('world') }",
+		Body: `func B() {
+	a := 1
+	b := 2
+	return a + b
+}`,
 	}
 
 	// Duplicate of Fn1, different whitespace
@@ -26,7 +36,12 @@ func TestExactDuplication(t *testing.T) {
 		Name:      "FuncCopy",
 		StartLine: 50,
 		EndLine:   60,
-		Body:      "func A() {\n\tprint('hello')\n}",
+		Body: `func A() {
+		x := 1
+		y := 2
+		z := 3
+		return x + y + z
+	}`,
 	}
 
 	detector.AddFunction("file1.go", fn1)

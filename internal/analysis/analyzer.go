@@ -144,8 +144,14 @@ func (a *Analyzer) analyzeFile(filePath string) (*FileAnalysis, error) {
 		fileAnalysis, err = parser.ParseFile(filePath)
 		
 	case context.LanguagePython:
-		parser := NewRegexParser(string(context.LanguagePython))
-		fileAnalysis, err = parser.ParseFile(filePath)
+		// Try AST parser first
+		astParser := NewPythonParser()
+		fileAnalysis, err = astParser.ParseFile(filePath)
+		if err != nil {
+			// Silent fallback to regex parser if AST parsing fails
+			regexParser := NewRegexParser(string(context.LanguagePython))
+			fileAnalysis, err = regexParser.ParseFile(filePath)
+		}
 	
 	default:
 		// For unsupported languages, do basic analysis

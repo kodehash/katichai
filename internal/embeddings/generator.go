@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/katichai/katich/internal/analysis"
 )
@@ -142,6 +143,10 @@ func (g *Generator) GenerateForAnalysis(analysisResult *analysis.AnalysisResult,
 		// Generate all embeddings in batches
 		embeddings, err := g.provider.GenerateBatchEmbeddings(snippetsToGenerate)
 		if err != nil {
+			// Check if it's a quota error and provide helpful guidance
+			if strings.Contains(err.Error(), "quota exceeded") || strings.Contains(err.Error(), "insufficient_quota") {
+				return nil, fmt.Errorf("batch embedding generation failed: %w\n\n💡 Tip: You can use Ollama for local embeddings instead:\n   1. Install Ollama: https://ollama.ai\n   2. Run: ollama pull nomic-embed-text\n   3. The system will automatically use Ollama if available", err)
+			}
 			return nil, fmt.Errorf("batch embedding generation failed: %w", err)
 		}
 		

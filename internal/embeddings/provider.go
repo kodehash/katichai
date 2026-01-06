@@ -171,6 +171,29 @@ func (p *OpenAIProvider) GenerateEmbedding(text string) ([]float32, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		
+		// Parse error response to provide better error messages
+		var errorResp struct {
+			Error struct {
+				Message string `json:"message"`
+				Type    string `json:"type"`
+				Code    string `json:"code"`
+			} `json:"error"`
+		}
+		
+		if err := json.Unmarshal(body, &errorResp); err == nil {
+			// Check for quota errors
+			if resp.StatusCode == 429 && (errorResp.Error.Code == "insufficient_quota" || errorResp.Error.Type == "insufficient_quota") {
+				return nil, fmt.Errorf("openai quota exceeded: %s. Please check your OpenAI billing and plan. Consider using Ollama for local embeddings instead (see docs)", errorResp.Error.Message)
+			}
+			// Check for rate limit errors
+			if resp.StatusCode == 429 {
+				return nil, fmt.Errorf("openai rate limit exceeded: %s. Please wait a moment and try again, or use Ollama for local embeddings", errorResp.Error.Message)
+			}
+			// Return formatted error message
+			return nil, fmt.Errorf("openai error (%s): %s", errorResp.Error.Code, errorResp.Error.Message)
+		}
+		
 		return nil, fmt.Errorf("openai returned status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -246,6 +269,29 @@ func (p *OpenAIProvider) GenerateBatchEmbeddings(texts []string) ([][]float32, e
 		
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
+			
+			// Parse error response to provide better error messages
+			var errorResp struct {
+				Error struct {
+					Message string `json:"message"`
+					Type    string `json:"type"`
+					Code    string `json:"code"`
+				} `json:"error"`
+			}
+			
+			if err := json.Unmarshal(body, &errorResp); err == nil {
+				// Check for quota errors
+				if resp.StatusCode == 429 && (errorResp.Error.Code == "insufficient_quota" || errorResp.Error.Type == "insufficient_quota") {
+					return nil, fmt.Errorf("openai quota exceeded: %s. Please check your OpenAI billing and plan. Consider using Ollama for local embeddings instead (see docs)", errorResp.Error.Message)
+				}
+				// Check for rate limit errors
+				if resp.StatusCode == 429 {
+					return nil, fmt.Errorf("openai rate limit exceeded: %s. Please wait a moment and try again, or use Ollama for local embeddings", errorResp.Error.Message)
+				}
+				// Return formatted error message
+				return nil, fmt.Errorf("openai error (%s): %s", errorResp.Error.Code, errorResp.Error.Message)
+			}
+			
 			return nil, fmt.Errorf("openai returned status %d: %s", resp.StatusCode, string(body))
 		}
 		
