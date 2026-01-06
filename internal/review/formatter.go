@@ -81,6 +81,81 @@ func (f *Formatter) FormatText(report *ReviewReport) string {
 		sb.WriteString("✅ No critical issues found.\n\n")
 	}
 	
+	// DB/ORM Query Review (before duplicate code section)
+	if len(report.DBQueryReviews) > 0 {
+		sb.WriteString("🗄️  DB/ORM QUERY REVIEW\n")
+		
+		// Group by efficiency score
+		lowEfficiency := []DBQueryReview{}
+		mediumEfficiency := []DBQueryReview{}
+		highEfficiency := []DBQueryReview{}
+		
+		for _, review := range report.DBQueryReviews {
+			if review.EfficiencyScore < 0.5 {
+				lowEfficiency = append(lowEfficiency, review)
+			} else if review.EfficiencyScore < 0.8 {
+				mediumEfficiency = append(mediumEfficiency, review)
+			} else {
+				highEfficiency = append(highEfficiency, review)
+			}
+		}
+		
+		// Show low efficiency first (most important)
+		if len(lowEfficiency) > 0 {
+			sb.WriteString("  ⚠️  Low Efficiency Queries:\n")
+			for _, review := range lowEfficiency {
+				sb.WriteString(fmt.Sprintf("    • %s:%d (%s) - Efficiency: %.0f%% [%s]\n", 
+					review.File, review.Line, review.Function, review.EfficiencyScore*100, review.QueryType))
+				for _, issue := range review.Issues {
+					icon := "🔴"
+					if issue.Severity == "WARNING" {
+						icon = "🟡"
+					} else if issue.Severity == "INFO" {
+						icon = "🔵"
+					}
+					sb.WriteString(fmt.Sprintf("      %s %s: %s\n", icon, issue.Type, issue.Description))
+					if issue.Suggestion != "" {
+						sb.WriteString(fmt.Sprintf("        💡 Suggestion: %s\n", issue.Suggestion))
+					}
+				}
+				if review.Recommendation != "" {
+					sb.WriteString(fmt.Sprintf("        💡 %s\n", review.Recommendation))
+				}
+			}
+		}
+		
+		// Show medium efficiency
+		if len(mediumEfficiency) > 0 {
+			sb.WriteString("  ⚡ Medium Efficiency Queries:\n")
+			for _, review := range mediumEfficiency {
+				sb.WriteString(fmt.Sprintf("    • %s:%d (%s) - Efficiency: %.0f%% [%s]\n", 
+					review.File, review.Line, review.Function, review.EfficiencyScore*100, review.QueryType))
+				for _, issue := range review.Issues {
+					if issue.Severity == "CRITICAL" || issue.Severity == "WARNING" {
+						icon := "🟡"
+						if issue.Severity == "CRITICAL" {
+							icon = "🔴"
+						}
+						sb.WriteString(fmt.Sprintf("      %s %s: %s\n", icon, issue.Type, issue.Description))
+						if issue.Suggestion != "" {
+							sb.WriteString(fmt.Sprintf("        💡 Suggestion: %s\n", issue.Suggestion))
+						}
+					}
+				}
+				if review.Recommendation != "" {
+					sb.WriteString(fmt.Sprintf("        💡 %s\n", review.Recommendation))
+				}
+			}
+		}
+		
+		// Summary for high efficiency (just count)
+		if len(highEfficiency) > 0 {
+			sb.WriteString(fmt.Sprintf("  ✅ %d high efficiency quer%s found\n", len(highEfficiency), pluralize(len(highEfficiency))))
+		}
+		
+		sb.WriteString("\n")
+	}
+	
 	// Show duplicate summary
 	if duplicateCount > 0 {
 		sb.WriteString("🔄 DUPLICATE CODE\n")

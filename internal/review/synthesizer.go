@@ -23,6 +23,7 @@ type ReviewReport struct {
 	ComplexityIssues     []ComplexityIssue                 `json:"complexity_issues,omitempty"`
 	SimilarityCheckLimited bool                            `json:"similarity_check_limited,omitempty"`
 	SimilarityCheckReason  string                          `json:"similarity_check_reason,omitempty"`
+	DBQueryReviews        []DBQueryReview                  `json:"db_query_reviews,omitempty"`
 }
 
 // ComplexityIssue represents an unnecessarily complex code block or architectural pattern
@@ -35,6 +36,26 @@ type ComplexityIssue struct {
 	Reasoning   string  `json:"reasoning"` // Detailed explanation of why it's unnecessarily complex
 	Suggestion  string  `json:"suggestion"`
 	Type        string  `json:"type"` // "code" or "architectural"
+}
+
+// DBQueryReview represents a review of database queries
+type DBQueryReview struct {
+	File            string  `json:"file"`
+	Line            int     `json:"line"`
+	Function        string  `json:"function"`
+	QueryType       string  `json:"query_type"` // "ORM" or "RAW"
+	EfficiencyScore float64 `json:"efficiency_score"` // 0.0-1.0
+	Issues          []DBQueryIssue `json:"issues"`
+	Recommendation  string  `json:"recommendation"`
+	QuerySnippet    string  `json:"query_snippet"` // Code snippet showing the query
+}
+
+// DBQueryIssue represents a specific issue with a query
+type DBQueryIssue struct {
+	Type        string `json:"type"` // "N+1", "MISSING_INDEX", "INEFFICIENT_JOIN", "RAW_PREFERRED", "SELECT_ALL", "NO_LIMIT", etc.
+	Severity    string `json:"severity"` // "CRITICAL", "WARNING", "INFO"
+	Description string `json:"description"`
+	Suggestion  string `json:"suggestion"`
 }
 
 // SamplingInfo contains information about which files were reviewed and which were ignored
@@ -88,7 +109,7 @@ func NewSynthesizer() *Synthesizer {
 }
 
 // Synthesize combines LLM output with static analysis
-func (s *Synthesizer) Synthesize(llmOutput string, staticIssues []analysis.Issue, duplicates []string, fileAnalysis map[string]*analysis.FileAnalysis, tokensUsed TokenUsage, similarityLimited bool, similarityReason string) *ReviewReport {
+func (s *Synthesizer) Synthesize(llmOutput string, staticIssues []analysis.Issue, duplicates []string, fileAnalysis map[string]*analysis.FileAnalysis, tokensUsed TokenUsage, similarityLimited bool, similarityReason string, dbQueryReviews []DBQueryReview) *ReviewReport {
 	report := &ReviewReport{
 		// Status:       "PASS",  // Commented out - scoring is subjective
 		// Score:        100,      // Commented out - scoring is subjective

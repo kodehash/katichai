@@ -126,10 +126,31 @@ func (e *ReviewEngine) Review(diff *git.Diff, diffRange ...string) (*ReviewRepor
 	// 2. Aggregate Issues for Prompt
 	var staticIssues []analysis.Issue
 	var duplicateWarnings []string
+	var dbQueryReviews []DBQueryReview
 
 	// Initialize detectors
 	driftDetector := analysis.NewDriftDetector()
 	exactDupDetector := analysis.NewExactDuplicationDetector()
+	
+	// Analyze DB/ORM queries
+	for path, fileAnalysis := range localResult.FileAnalysis {
+		// Check if file has database/ORM calls
+		if e.hasDatabaseOrORMCalls(fileAnalysis) {
+			queries := analysis.AnalyzeDBQueries(fileAnalysis, path)
+			for _, query := range queries {
+				dbQueryReviews = append(dbQueryReviews, DBQueryReview{
+					File:            query.File,
+					Line:            query.Line,
+					Function:        query.Function,
+					QueryType:       query.QueryType,
+					EfficiencyScore: query.EfficiencyScore,
+					Issues:          e.convertDBQueryIssues(query.Issues),
+					Recommendation:  query.Recommendation,
+					QuerySnippet:    query.Query,
+				})
+			}
+		}
+	}
 
 	// Populate exact match index (should be done from context in real app, here we demo on local files)
 	// For now we skip repo-wide indexing for speed and just check self-duplication in diff for demo
@@ -279,7 +300,7 @@ func (e *ReviewEngine) Review(diff *git.Diff, diffRange ...string) (*ReviewRepor
 	
 	if !valid {
 		fmt.Printf("⚠️  Prompt size (%d tokens) exceeds model limit (%d tokens). Using chunked review...\n", totalTokens, modelLimit)
-		return e.performChunkedReview(diff, localResult, staticIssues, duplicateWarnings, &classification, sampledDiff, samplingReport, exactDupDetector)
+		return e.performChunkedReview(diff, localResult, staticIssues, duplicateWarnings, &classification, sampledDiff, samplingReport, exactDupDetector, dbQueryReviews)
 	}
 	
 	_ = validationErr // Suppress unused variable warning
@@ -308,7 +329,7 @@ func (e *ReviewEngine) Review(diff *git.Diff, diffRange ...string) (*ReviewRepor
 		OutputTokens: resp.Usage.CompletionTokens,
 		TotalTokens:  resp.Usage.TotalTokens,
 	}
-	report := e.synthesizer.Synthesize(filteredLLMOutput, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage, localResult.SimilarityCheckLimited, localResult.SimilarityCheckReason)
+	report := e.synthesizer.Synthesize(filteredLLMOutput, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage, localResult.SimilarityCheckLimited, localResult.SimilarityCheckReason, dbQueryReviews)
 
 	// 7.5. Populate sampling information
 	e.populateSamplingInfo(report, diff, sampledDiff, samplingReport)
@@ -405,6 +426,7 @@ func (e *ReviewEngine) performChunkedReview(
 	sampledDiff *SampledDiff,
 	samplingReport *SamplingReport,
 	exactDupDetector *analysis.ExactDuplicationDetector,
+	dbQueryReviews []DBQueryReview,
 ) (*ReviewReport, error) {
 	
 	// 1. Create chunks
@@ -523,7 +545,7 @@ func (e *ReviewEngine) performChunkedReview(
 		TotalTokens:  totalInputTokens + totalOutputTokens,
 	}
 	
-	report := e.synthesizer.Synthesize(filteredLLMOutput, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage, localResult.SimilarityCheckLimited, localResult.SimilarityCheckReason)
+	report := e.synthesizer.Synthesize(filteredLLMOutput, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage, localResult.SimilarityCheckLimited, localResult.SimilarityCheckReason, dbQueryReviews)
 	
 	// 6. Populate sampling information
 	e.populateSamplingInfo(report, diff, sampledDiff, samplingReport)
@@ -643,6 +665,7 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 	fmt.Println("   ⏳ Initializing duplicate detector...")
 	staticIssues := make([]analysis.Issue, 0)
 	duplicateWarnings := make([]string, 0)
+	dbQueryReviews := make([]DBQueryReview, 0)
 
 	// Initialize detectors
 	exactDupDetector := analysis.NewExactDuplicationDetector()
@@ -818,7 +841,7 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 	
 	if !valid {
 		fmt.Printf("⚠️  Prompt size (%d tokens) exceeds model limit (%d tokens). Using chunked review for full repository...\n", totalTokens, modelLimit)
-		return e.performChunkedFullRepositoryReview(diff, localResult, staticIssues, duplicateWarnings, &classification, sampledDiff, samplingReport, exactDupDetector)
+		return e.performChunkedFullRepositoryReview(diff, localResult, staticIssues, duplicateWarnings, &classification, sampledDiff, samplingReport, exactDupDetector, dbQueryReviews)
 	}
 	
 	_ = validationErr // Suppress unused variable warning
@@ -876,7 +899,7 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 		OutputTokens: resp.Usage.CompletionTokens,
 		TotalTokens:  resp.Usage.TotalTokens,
 	}
-	report := e.synthesizer.Synthesize(resp.Content, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage, localResult.SimilarityCheckLimited, localResult.SimilarityCheckReason)
+	report := e.synthesizer.Synthesize(resp.Content, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage, localResult.SimilarityCheckLimited, localResult.SimilarityCheckReason, dbQueryReviews)
 
 	// 7.5. Populate sampling information
 	e.populateSamplingInfo(report, diff, sampledDiff, samplingReport)
@@ -908,6 +931,7 @@ func (e *ReviewEngine) performChunkedFullRepositoryReview(
 	sampledDiff *SampledDiff,
 	samplingReport *SamplingReport,
 	exactDupDetector *analysis.ExactDuplicationDetector,
+	dbQueryReviews []DBQueryReview,
 ) (*ReviewReport, error) {
 	
 	// 1. Create chunks
@@ -1047,7 +1071,7 @@ func (e *ReviewEngine) performChunkedFullRepositoryReview(
 		TotalTokens:  totalInputTokens + totalOutputTokens,
 	}
 	
-	report := e.synthesizer.Synthesize(mergedContent, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage, localResult.SimilarityCheckLimited, localResult.SimilarityCheckReason)
+	report := e.synthesizer.Synthesize(mergedContent, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage, localResult.SimilarityCheckLimited, localResult.SimilarityCheckReason, dbQueryReviews)
 	
 	// 6. Populate sampling information
 	e.populateSamplingInfo(report, diff, sampledDiff, samplingReport)
@@ -1310,6 +1334,106 @@ func (e *ReviewEngine) findActuallyChangedFunctions(diff *git.Diff, fileAnalysis
 	}
 	
 	return changedFunctions
+}
+
+// hasDatabaseOrORMCalls checks if a file analysis contains database/ORM calls
+func (e *ReviewEngine) hasDatabaseOrORMCalls(fileAnalysis *analysis.FileAnalysis) bool {
+	// Check imports for database/ORM libraries
+	for _, imp := range fileAnalysis.Imports {
+		importPath := strings.ToLower(imp.Path)
+		
+		// Python database/ORM imports
+		if strings.Contains(importPath, "sqlalchemy") ||
+			strings.Contains(importPath, "django.db") ||
+			strings.Contains(importPath, "peewee") ||
+			strings.Contains(importPath, "sqlite3") ||
+			strings.Contains(importPath, "psycopg2") ||
+			strings.Contains(importPath, "mysql") ||
+			strings.Contains(importPath, "pymongo") ||
+			strings.Contains(importPath, "sqlmodel") {
+			return true
+		}
+		
+		// JavaScript/TypeScript database/ORM imports
+		if strings.Contains(importPath, "sequelize") ||
+			strings.Contains(importPath, "prisma") ||
+			strings.Contains(importPath, "typeorm") ||
+			strings.Contains(importPath, "mongoose") ||
+			strings.Contains(importPath, "knex") ||
+			strings.Contains(importPath, "bookshelf") {
+			return true
+		}
+		
+		// Go database/ORM imports
+		if strings.Contains(importPath, "database/sql") ||
+			strings.Contains(importPath, "gorm.io/gorm") ||
+			strings.Contains(importPath, "github.com/jmoiron/sqlx") ||
+			strings.Contains(importPath, "gorm.io/driver") {
+			return true
+		}
+		
+		// Java database/ORM imports
+		if strings.Contains(importPath, "javax.persistence") ||
+			strings.Contains(importPath, "org.hibernate") ||
+			strings.Contains(importPath, "org.springframework.data") ||
+			strings.Contains(importPath, "jakarta.persistence") {
+			return true
+		}
+	}
+	
+	// Check function bodies for database/ORM method calls
+	dbMethodPatterns := []string{
+		`\.query\(`, `\.filter\(`, `\.get\(`, `\.save\(`, `\.delete\(`, `\.create\(`, `\.update\(`,
+		`execute\(`, `cursor\(`, `\.session\(`, `\.commit\(`, `\.rollback\(`,
+		`\.findOne\(`, `\.findAll\(`, `\.create\(`, `\.update\(`, `\.destroy\(`, `\.save\(`, `\.query\(`,
+		`\.find\(`, `\.findById\(`, `\.findOneAndUpdate\(`, `\.findOneAndDelete\(`,
+		`\.Query\(`, `\.QueryRow\(`, `\.Exec\(`, `\.First\(`, `\.Find\(`, `\.Create\(`, `\.Save\(`,
+		`\.Update\(`, `\.Delete\(`, `\.Where\(`, `\.Select\(`,
+		`\.save\(`, `\.findById\(`, `\.findAll\(`, `\.delete\(`, `\.persist\(`, `\.merge\(`,
+		`\.createQuery\(`, `\.getResultList\(`, `\.executeUpdate\(`,
+	}
+	
+	for _, fn := range fileAnalysis.Functions {
+		if fn.Body == "" {
+			continue
+		}
+		
+		bodyLower := strings.ToLower(fn.Body)
+		for _, pattern := range dbMethodPatterns {
+			re := regexp.MustCompile("(?i)" + pattern)
+			if re.MatchString(fn.Body) {
+				return true
+			}
+		}
+		
+		if strings.Contains(bodyLower, "db.query") ||
+			strings.Contains(bodyLower, "db.execute") ||
+			strings.Contains(bodyLower, "db.session") ||
+			strings.Contains(bodyLower, "model.save") ||
+			strings.Contains(bodyLower, "model.create") ||
+			strings.Contains(bodyLower, "model.update") ||
+			strings.Contains(bodyLower, "model.delete") ||
+			strings.Contains(bodyLower, "orm.query") ||
+			strings.Contains(bodyLower, "orm.save") {
+			return true
+		}
+	}
+	
+	return false
+}
+
+// convertDBQueryIssues converts analysis.DBQueryIssue to review.DBQueryIssue
+func (e *ReviewEngine) convertDBQueryIssues(issues []analysis.DBQueryIssue) []DBQueryIssue {
+	result := make([]DBQueryIssue, len(issues))
+	for i, issue := range issues {
+		result[i] = DBQueryIssue{
+			Type:        issue.Type,
+			Severity:    issue.Severity,
+			Description: issue.Description,
+			Suggestion:  issue.Suggestion,
+		}
+	}
+	return result
 }
 
 // removeCriticalIssues removes the critical issues section when no real code changes exist

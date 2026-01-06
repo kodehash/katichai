@@ -304,6 +304,72 @@ func (f *Formatter) FormatHTML(report *ReviewReport, fileContents map[string]str
             </section>
             {{end}}
 
+            <!-- DB/ORM Query Review -->
+            {{if gt (len .DBQueryReviews) 0}}
+            <section id="db-query-review" class="p-6 border-t border-gray-200">
+                <button onclick="toggleSection('db-query-review-content')" class="flex items-center justify-between w-full text-left">
+                    <div>
+                        <h2 class="text-2xl font-bold text-gray-900">🗄️ DB/ORM Query Review</h2>
+                        <p class="text-sm text-gray-500 mt-1">{{len .DBQueryReviews}} quer{{if eq (len .DBQueryReviews) 1}}y{{else}}ies{{end}} reviewed</p>
+                    </div>
+                    <span class="text-gray-500" id="db-query-review-toggle">▶</span>
+                </button>
+                <div id="db-query-review-content" class="mt-4" style="display: none;">
+                <div class="bg-white rounded-lg shadow p-6 mb-6">
+                    <p class="text-gray-600 mb-4">Review of database and ORM queries for efficiency and best practices.</p>
+                    {{range .DBQueryReviews}}
+                    <div class="border-l-4 {{if lt .EfficiencyScore 0.5}}border-red-500{{else if lt .EfficiencyScore 0.8}}border-yellow-500{{else}}border-green-500{{end}} pl-4 mb-6">
+                        <div class="flex items-center justify-between mb-2">
+                            <h3 class="text-lg font-semibold">
+                                <a href="#file-{{.File | replace "/" "-" | replace "." "-"}}" class="text-blue-600 hover:underline">{{.File}}:{{.Line}}</a>
+                                <span class="text-sm text-gray-500">({{.Function}})</span>
+                            </h3>
+                            <div class="flex items-center gap-2">
+                                <span class="px-2 py-1 rounded text-xs font-medium {{if eq .QueryType "RAW"}}bg-blue-100 text-blue-800{{else}}bg-purple-100 text-purple-800{{end}}">
+                                    {{.QueryType}}
+                                </span>
+                                <span class="px-2 py-1 rounded text-xs font-medium {{if lt .EfficiencyScore 0.5}}bg-red-100 text-red-800{{else if lt .EfficiencyScore 0.8}}bg-yellow-100 text-yellow-800{{else}}bg-green-100 text-green-800{{end}}">
+                                    Efficiency: {{printf "%.0f" (multiply .EfficiencyScore 100)}}%
+                                </span>
+                            </div>
+                        </div>
+                        {{if .QuerySnippet}}
+                        <div class="bg-gray-50 rounded p-3 mb-3 font-mono text-sm overflow-x-auto">
+                            <pre class="whitespace-pre-wrap">{{.QuerySnippet}}</pre>
+                        </div>
+                        {{end}}
+                        {{if gt (len .Issues) 0}}
+                        <div class="mb-3">
+                            <h4 class="font-semibold mb-2">Issues Found:</h4>
+                            <ul class="list-disc list-inside space-y-1">
+                                {{range .Issues}}
+                                <li>
+                                    <span class="font-medium {{if eq .Severity "CRITICAL"}}text-red-600{{else if eq .Severity "WARNING"}}text-yellow-600{{else}}text-blue-600{{end}}">
+                                        [{{.Severity}}] {{.Type}}:
+                                    </span>
+                                    <span>{{.Description}}</span>
+                                    {{if .Suggestion}}
+                                    <div class="ml-6 mt-1 text-sm text-gray-600">
+                                        💡 <strong>Suggestion:</strong> {{.Suggestion}}
+                                    </div>
+                                    {{end}}
+                                </li>
+                                {{end}}
+                            </ul>
+                        </div>
+                        {{end}}
+                        {{if .Recommendation}}
+                        <div class="bg-blue-50 border-l-4 border-blue-400 p-3 rounded">
+                            <p class="text-sm"><strong>💡 Recommendation:</strong> {{.Recommendation}}</p>
+                        </div>
+                        {{end}}
+                    </div>
+                    {{end}}
+                </div>
+                </div>
+            </section>
+            {{end}}
+
             <!-- Duplicate Code -->
             {{if .DuplicateBlocks}}
             <section id="duplicates" class="p-6 border-t border-gray-200">
@@ -483,6 +549,7 @@ func (f *Formatter) FormatHTML(report *ReviewReport, fileContents map[string]str
 	t, err := template.New("html").Funcs(template.FuncMap{
 		"multiply": func(a, b float64) float64 { return a * b },
 		"contains": func(s, substr string) bool { return strings.Contains(s, substr) },
+		"replace": func(s, old, new string) string { return strings.ReplaceAll(s, old, new) },
 		"formatSuggestion": func(text string) template.HTML {
 			// Replace **text** with <strong>text</strong>
 			// Pattern: **text** -> <strong>text</strong>
@@ -568,6 +635,7 @@ type htmlData struct {
 	HasComplexity       bool
 	ComplexityIssues    []complexityIssueHTML
 	CriticalIssues     []criticalIssueHTML
+	DBQueryReviews      []dbQueryReviewHTML
 	DuplicateBlocks    []duplicateBlockHTML
 	AIFiles            []aiFileHTML
 	StaticAnalysisIssues []staticAnalysisIssueHTML
@@ -592,6 +660,24 @@ type criticalIssueHTML struct {
 	BorderClass   string
 	CategoryClass string
 	SeverityClass string
+}
+
+type dbQueryReviewHTML struct {
+	File            string
+	Line            int
+	Function        string
+	QueryType       string
+	EfficiencyScore float64
+	Recommendation  string
+	QuerySnippet    string
+	Issues          []dbQueryIssueHTML
+}
+
+type dbQueryIssueHTML struct {
+	Type        string
+	Severity    string
+	Description string
+	Suggestion  string
 }
 
 type duplicateBlockHTML struct {
@@ -735,7 +821,7 @@ func (f *Formatter) prepareHTMLData(report *ReviewReport, fileContents map[strin
 			}
 
 			data.CriticalIssues = append(data.CriticalIssues, issueHTML)
-	}
+		}
 
 	// Duplicate blocks
 	for _, dup := range report.DuplicateBlocks {
@@ -759,6 +845,32 @@ func (f *Formatter) prepareHTMLData(report *ReviewReport, fileContents map[strin
 		}
 
 		data.DuplicateBlocks = append(data.DuplicateBlocks, dupHTML)
+	}
+
+	// DB Query Reviews
+	for _, review := range report.DBQueryReviews {
+		dbQueryHTML := dbQueryReviewHTML{
+			File:            review.File,
+			Line:            review.Line,
+			Function:        review.Function,
+			QueryType:       review.QueryType,
+			EfficiencyScore: review.EfficiencyScore,
+			Recommendation:  review.Recommendation,
+			QuerySnippet:    review.QuerySnippet,
+		}
+		
+		// Convert issues
+		for _, issue := range review.Issues {
+			issueHTML := dbQueryIssueHTML{
+				Type:        issue.Type,
+				Severity:    issue.Severity,
+				Description: issue.Description,
+				Suggestion:  issue.Suggestion,
+			}
+			dbQueryHTML.Issues = append(dbQueryHTML.Issues, issueHTML)
+		}
+		
+		data.DBQueryReviews = append(data.DBQueryReviews, dbQueryHTML)
 	}
 
 	// AI-generated files - only include files with >= 60% confidence (0.6)
