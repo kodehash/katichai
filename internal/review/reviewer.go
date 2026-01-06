@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"sort"
 
 	"github.com/katichai/katich/internal/analysis"
 	"github.com/katichai/katich/internal/config"
@@ -23,10 +24,12 @@ type Reviewer struct {
 
 // ReviewResult contains the results of a review
 type ReviewResult struct {
-	FileAnalysis    map[string]*analysis.FileAnalysis
-	Duplicates      map[string][]embeddings.SimilarityResult
-	ReuseCandidates map[string][]embeddings.SimilarityResult
-	Metrics         analysis.CodeMetrics
+	FileAnalysis          map[string]*analysis.FileAnalysis
+	Duplicates            map[string][]embeddings.SimilarityResult
+	ReuseCandidates       map[string][]embeddings.SimilarityResult
+	Metrics               analysis.CodeMetrics
+	SimilarityCheckLimited bool   // True if similarity check was limited to fewer files
+	SimilarityCheckReason  string // Reason why similarity check was limited/disabled
 }
 
 // NewReviewer creates a new reviewer
@@ -85,21 +88,34 @@ func (r *Reviewer) ReviewDiff(diff *git.Diff) (*ReviewResult, error) {
 		return nil, fmt.Errorf("analysis failed: %w", err)
 	}
 	result.FileAnalysis = fileAnalyses
-	fmt.Printf("   [DEBUG] Static analysis returned %d files\n", len(fileAnalyses))
 
 	// 2. Similarity / Duplication Check
-	// Skip similarity checks for large repositories (>100 files) as they're too slow
-	// Similarity checks are more useful for diff reviews, not full repository reviews
-	fmt.Println("   [DEBUG] Starting similarity/duplication check...")
-	fmt.Printf("   [DEBUG] hasContext: %v\n", r.hasContext)
-	if r.hasContext && len(fileAnalyses) <= 100 {
-		fmt.Printf("   [DEBUG] Processing %d files for similarity check...\n", len(fileAnalyses))
-		fileCount := 0
-		for filePath, fileAnalysis := range fileAnalyses {
-			fileCount++
-			if fileCount%50 == 0 {
-				fmt.Printf("   [DEBUG] Processing similarity for file %d/%d: %s\n", fileCount, len(fileAnalyses), filePath)
+	// For large reviews (>15 files), limit similarity check to top 15 files by risk score
+	// This provides value while maintaining performance
+	similarityLimited := false
+	similarityReason := ""
+	filesToCheck := make(map[string]*analysis.FileAnalysis)
+	
+	if !r.hasContext {
+		similarityLimited = true
+		similarityReason = "no context available"
+	} else if len(fileAnalyses) > 15 {
+		// Select top 15 files by risk score
+		selectedFiles := r.selectTopFilesForSimilarityCheck(diff.Files, fileAnalyses, 15)
+		for _, filePath := range selectedFiles {
+			if analysis, exists := fileAnalyses[filePath]; exists {
+				filesToCheck[filePath] = analysis
 			}
+		}
+		similarityLimited = true
+		similarityReason = fmt.Sprintf("limited to top 15 files (out of %d total)", len(fileAnalyses))
+	} else {
+		// Check all files if 15 or fewer
+		filesToCheck = fileAnalyses
+	}
+	
+	if r.hasContext && len(filesToCheck) > 0 {
+		for filePath, fileAnalysis := range filesToCheck {
 			// Create trivial detector for this language
 			trivialDetector := analysis.NewTrivialPatternDetector(fileAnalysis.Language)
 			
@@ -124,9 +140,6 @@ func (r *Reviewer) ReviewDiff(diff *git.Diff) (*ReviewResult, error) {
 					fn.Name, 
 					float32(r.config.Analysis.DuplicateThreshold),
 				)
-				if err != nil {
-					fmt.Printf("   [DEBUG] Error detecting duplicates for %s::%s: %v\n", filePath, fn.Name, err)
-				}
 				
 				if err == nil && len(duplicates) > 0 {
 					// Further filter: only report if LOC and complexity are similar
@@ -167,17 +180,104 @@ func (r *Reviewer) ReviewDiff(diff *git.Diff) (*ReviewResult, error) {
 				}
 			}
 		}
-		fmt.Println("   [DEBUG] Similarity check complete")
-	} else {
-		if len(fileAnalyses) > 100 {
-			fmt.Printf("   [DEBUG] Skipping similarity check (too many files: %d, limit: 100)\n", len(fileAnalyses))
-		} else {
-			fmt.Println("   [DEBUG] Skipping similarity check (no context)")
-		}
+	}
+	
+	// Store similarity check status in result for reporting
+	if similarityLimited {
+		result.SimilarityCheckLimited = true
+		result.SimilarityCheckReason = similarityReason
 	}
 
-	fmt.Println("   [DEBUG] ReviewDiff returning successfully")
 	return result, nil
+}
+
+// selectTopFilesForSimilarityCheck selects the top N files by risk score for similarity checking
+func (r *Reviewer) selectTopFilesForSimilarityCheck(diffFiles []*git.DiffFile, fileAnalyses map[string]*analysis.FileAnalysis, maxFiles int) []string {
+	// Create a map of file paths to diff files for risk scoring
+	diffFileMap := make(map[string]*git.DiffFile)
+	for _, file := range diffFiles {
+		diffFileMap[file.Path] = file
+	}
+	
+	// Calculate risk scores for all files
+	type fileRiskScore struct {
+		filePath string
+		score    int
+	}
+	
+	risks := make([]fileRiskScore, 0, len(fileAnalyses))
+	
+	for filePath, fileAnalysis := range fileAnalyses {
+		score := 0
+		diffFile := diffFileMap[filePath]
+		
+		// Security-sensitive paths
+		if isSecuritySensitive(filePath) {
+			score += 10
+		}
+		
+		// Core business logic
+		if isCoreBusinessLogic(filePath) {
+			score += 8
+		}
+		
+		// Database/API interaction
+		if isDatabaseOrAPI(filePath) {
+			score += 7
+		}
+		
+		// High complexity from static analysis
+		highComplexityCount := 0
+		for _, fn := range fileAnalysis.Functions {
+			if fn.Complexity > 15 {
+				highComplexityCount++
+			}
+		}
+		if highComplexityCount > 0 {
+			score += 3
+		}
+		
+		// AI-generated patterns
+		for _, issue := range fileAnalysis.Issues {
+			if issue.Type == analysis.IssueTypeAIGenerated {
+				score += 3
+				break
+			}
+		}
+		
+		// Large files get priority
+		if diffFile != nil && diffFile.Additions > 200 {
+			score += 2
+		}
+		
+		// Lower priority: tests
+		if isTestFile(filePath) {
+			score -= 5
+		}
+		
+		// Lower priority: docs
+		if isDocFile(filePath) {
+			score -= 3
+		}
+		
+		risks = append(risks, fileRiskScore{
+			filePath: filePath,
+			score:    score,
+		})
+	}
+	
+	// Sort by score (highest first)
+	sort.Slice(risks, func(i, j int) bool {
+		return risks[i].score > risks[j].score
+	})
+	
+	// Select top N
+	selected := make([]string, 0, maxFiles)
+	for i := 0; i < len(risks) && i < maxFiles; i++ {
+		selected = append(selected, risks[i].filePath)
+	}
+	
+	return selected
 }
 
 // createSemanticSnippet creates an embedding-friendly representation focusing on logic

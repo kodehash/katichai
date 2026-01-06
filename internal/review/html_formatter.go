@@ -92,6 +92,15 @@ func (f *Formatter) FormatHTML(report *ReviewReport, fileContents map[string]str
                     <span class="font-medium">Tokens:</span> {{.TokensUsed.InputTokens}} input + {{.TokensUsed.OutputTokens}} output = <strong>{{.TokensUsed.TotalTokens}} total</strong>
                 </div>
                 {{end}}
+                {{if .SimilarityCheckLimited}}
+                <div class="mt-2 text-sm text-yellow-600">
+                    {{if contains .SimilarityCheckReason "no context"}}
+                    <span class="font-medium">⚠️ Similarity Check:</span> <span>Disabled ({{.SimilarityCheckReason}})</span>
+                    {{else}}
+                    <span class="font-medium">⚠️ Similarity Check:</span> <span>{{.SimilarityCheckReason}}</span>
+                    {{end}}
+                </div>
+                {{end}}
             </div>
 
             <!-- Dashboard -->
@@ -473,6 +482,7 @@ func (f *Formatter) FormatHTML(report *ReviewReport, fileContents map[string]str
 	// Parse and execute template
 	t, err := template.New("html").Funcs(template.FuncMap{
 		"multiply": func(a, b float64) float64 { return a * b },
+		"contains": func(s, substr string) bool { return strings.Contains(s, substr) },
 		"formatSuggestion": func(text string) template.HTML {
 			// Replace **text** with <strong>text</strong>
 			// Pattern: **text** -> <strong>text</strong>
@@ -539,14 +549,16 @@ type ignoredFileHTML struct {
 }
 
 type htmlData struct {
-	Timestamp          string
-	Status             string
-	StatusClass        string
-	StatusTextClass    string
-	Score              int
-	ScoreClass         string
-	Summary            string
-	TokensUsed         *tokenUsageHTML
+	Timestamp              string
+	Status                 string
+	StatusClass            string
+	StatusTextClass        string
+	Score                  int
+	ScoreClass             string
+	Summary                string
+	TokensUsed              *tokenUsageHTML
+	SimilarityCheckLimited  bool
+	SimilarityCheckReason    string
 	FileCount          int
 	CriticalIssueCount int
 	AIFileCount        int
@@ -673,6 +685,10 @@ func (f *Formatter) prepareHTMLData(report *ReviewReport, fileContents map[strin
 			TotalTokens:  report.TokensUsed.TotalTokens,
 		}
 	}
+	
+	// Similarity check status
+	data.SimilarityCheckLimited = report.SimilarityCheckLimited
+	data.SimilarityCheckReason = report.SimilarityCheckReason
 
 	// Critical issues (exclude static analysis and duplicate-related issues)
 	for _, issue := range report.Issues {
@@ -745,9 +761,9 @@ func (f *Formatter) prepareHTMLData(report *ReviewReport, fileContents map[strin
 		data.DuplicateBlocks = append(data.DuplicateBlocks, dupHTML)
 	}
 
-	// AI-generated files
+	// AI-generated files - only include files with >= 60% confidence (0.6)
 	for filePath, analysis := range report.FileAnalysis {
-		if analysis.AIScore != nil && analysis.AIScore.AIPercentage > 0 {
+		if analysis.AIScore != nil && analysis.AIScore.AIPercentage > 0 && analysis.AIScore.OverallConfidence >= 0.6 {
 			data.HasAI = true
 			data.AIFileCount++
 

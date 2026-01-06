@@ -345,12 +345,14 @@ func detectJSPatterns(fn FunctionInfo) (bool, []string) {
 	}
 
 	// 9. Consistent const/let usage (no var)
-	hasConst := strings.Contains(body, "const ")
-	hasLet := strings.Contains(body, "let ")
-	hasVar := strings.Contains(body, "var ")
-	if (hasConst || hasLet) && !hasVar {
-		indicators = append(indicators, "Modern variable declarations (const/let)")
-	}
+	// REMOVED: This is a good coding practice, not an AI indicator
+	// Using const/let instead of var is recommended in modern JavaScript/TypeScript
+	// hasConst := strings.Contains(body, "const ")
+	// hasLet := strings.Contains(body, "let ")
+	// hasVar := strings.Contains(body, "var ")
+	// if (hasConst || hasLet) && !hasVar {
+	// 	indicators = append(indicators, "Modern variable declarations (const/let)")
+	// }
 
 	// 10. Try-catch with specific patterns
 	if strings.Contains(body, "try {") && strings.Contains(body, "} catch") {

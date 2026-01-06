@@ -38,8 +38,9 @@ func CalculateAIScore(fileAnalysis *FileAnalysis, detector *AICodeDetector) *AIF
 	for _, fn := range fileAnalysis.Functions {
 		confidence, indicators := detector.CalculateConfidence(fn, fileAnalysis.Language)
 
-		// Threshold: 0.35 confidence = likely AI-generated
-		if confidence >= 0.35 {
+		// Threshold: 0.6 confidence (60%) = likely AI-generated
+		// This threshold is higher to reduce false positives from good coding practices
+		if confidence >= 0.6 {
 			aiLOC += fn.LOC
 
 			score.FunctionScores = append(score.FunctionScores, AIFunctionScore{

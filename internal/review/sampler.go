@@ -20,7 +20,7 @@ const (
 	MAX_CONTEXT_LINES        = 2
 	MAX_FILES_TO_REVIEW      = 20
 	LARGE_FILE_THRESHOLD     = 500 // Lines changed
-	MAX_FILES_FULL_REVIEW    = 15 // Maximum files to process at a time for full repository review
+	MAX_FILES_FULL_REVIEW    = 15 // Minimum files for full repository review (actual selection uses 30% of filtered files, max 30)
 	FULL_REVIEW_TOKEN_BUDGET = 30000 // Token budget for full repository review
 )
 

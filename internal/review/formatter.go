@@ -25,11 +25,21 @@ func (f *Formatter) FormatText(report *ReviewReport) string {
 
 	// Token Usage
 	if report.TokensUsed.TotalTokens > 0 {
-		sb.WriteString(fmt.Sprintf("📊 Tokens: %s%d input%s + %s%d output%s = %s%d total%s\n\n",
+		sb.WriteString(fmt.Sprintf("📊 Tokens: %s%d input%s + %s%d output%s = %s%d total%s\n",
 			"\033[36m", report.TokensUsed.InputTokens, "\033[0m",
 			"\033[36m", report.TokensUsed.OutputTokens, "\033[0m",
 			"\033[1;36m", report.TokensUsed.TotalTokens, "\033[0m"))
 	}
+	
+	// Similarity Check Status
+	if report.SimilarityCheckLimited {
+		if strings.Contains(report.SimilarityCheckReason, "no context") {
+			sb.WriteString(fmt.Sprintf("⚠️  Similarity Check: Disabled (%s)\n", report.SimilarityCheckReason))
+		} else {
+			sb.WriteString(fmt.Sprintf("⚠️  Similarity Check: %s\n", report.SimilarityCheckReason))
+		}
+	}
+	sb.WriteString("\n")
 
 	// Summary
 	if report.Summary != "" {
@@ -231,7 +241,8 @@ func (f *Formatter) formatAIAnalysis(sb *strings.Builder, report *ReviewReport) 
 	}, 0)
 	
 	for filePath, analysis := range report.FileAnalysis {
-		if analysis.AIScore != nil && analysis.AIScore.AIPercentage > 0 {
+		// Only include files with >= 60% confidence (0.6) that they're AI-generated
+		if analysis.AIScore != nil && analysis.AIScore.AIPercentage > 0 && analysis.AIScore.OverallConfidence >= 0.6 {
 			aiFiles = append(aiFiles, struct {
 				path      string
 				percentage float64

@@ -94,6 +94,15 @@ func (e *ReviewEngine) Review(diff *git.Diff, diffRange ...string) (*ReviewRepor
 	if err != nil {
 		return nil, fmt.Errorf("local analysis failed: %w", err)
 	}
+	
+	// Show similarity check status
+	if localResult.SimilarityCheckLimited {
+		if strings.Contains(localResult.SimilarityCheckReason, "no context") {
+			fmt.Printf("   ⚠️  Similarity check disabled: %s\n", localResult.SimilarityCheckReason)
+		} else {
+			fmt.Printf("   ⚠️  Similarity check %s\n", localResult.SimilarityCheckReason)
+		}
+	}
 
 	// 1.5 Run Classifier
 	// We run this early to potentially adjust strategy, though for now we just record it
@@ -299,7 +308,7 @@ func (e *ReviewEngine) Review(diff *git.Diff, diffRange ...string) (*ReviewRepor
 		OutputTokens: resp.Usage.CompletionTokens,
 		TotalTokens:  resp.Usage.TotalTokens,
 	}
-	report := e.synthesizer.Synthesize(filteredLLMOutput, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage)
+	report := e.synthesizer.Synthesize(filteredLLMOutput, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage, localResult.SimilarityCheckLimited, localResult.SimilarityCheckReason)
 
 	// 7.5. Populate sampling information
 	e.populateSamplingInfo(report, diff, sampledDiff, samplingReport)
@@ -514,7 +523,7 @@ func (e *ReviewEngine) performChunkedReview(
 		TotalTokens:  totalInputTokens + totalOutputTokens,
 	}
 	
-	report := e.synthesizer.Synthesize(filteredLLMOutput, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage)
+	report := e.synthesizer.Synthesize(filteredLLMOutput, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage, localResult.SimilarityCheckLimited, localResult.SimilarityCheckReason)
 	
 	// 6. Populate sampling information
 	e.populateSamplingInfo(report, diff, sampledDiff, samplingReport)
@@ -568,11 +577,19 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 		return nil, fmt.Errorf("local analysis failed: %w", err)
 	}
 	fmt.Printf("   ✓ Analyzed %d files\n", len(localResult.FileAnalysis))
-	fmt.Println("   [DEBUG] Static analysis complete, proceeding to classification...")
+	fmt.Println("   ⏳ Review in progress...")
+
+	// Show similarity check status
+	if localResult.SimilarityCheckLimited {
+		if strings.Contains(localResult.SimilarityCheckReason, "no context") {
+			fmt.Printf("   ⚠️  Similarity check disabled: %s\n", localResult.SimilarityCheckReason)
+		} else {
+			fmt.Printf("   ⚠️  Similarity check %s\n", localResult.SimilarityCheckReason)
+		}
+	}
 
 	// 1.5 Run Classifier (optional for full repo, but useful for context)
 	fmt.Println("🔍 Classifying repository changes...")
-	fmt.Println("   [DEBUG] Starting classification step...")
 	fmt.Println("   ⏳ Preparing classification input...")
 	classifier := llm.NewClassifier(e.llmClient)
 	
@@ -859,7 +876,7 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 		OutputTokens: resp.Usage.CompletionTokens,
 		TotalTokens:  resp.Usage.TotalTokens,
 	}
-	report := e.synthesizer.Synthesize(resp.Content, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage)
+	report := e.synthesizer.Synthesize(resp.Content, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage, localResult.SimilarityCheckLimited, localResult.SimilarityCheckReason)
 
 	// 7.5. Populate sampling information
 	e.populateSamplingInfo(report, diff, sampledDiff, samplingReport)
@@ -1030,7 +1047,7 @@ func (e *ReviewEngine) performChunkedFullRepositoryReview(
 		TotalTokens:  totalInputTokens + totalOutputTokens,
 	}
 	
-	report := e.synthesizer.Synthesize(mergedContent, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage)
+	report := e.synthesizer.Synthesize(mergedContent, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage, localResult.SimilarityCheckLimited, localResult.SimilarityCheckReason)
 	
 	// 6. Populate sampling information
 	e.populateSamplingInfo(report, diff, sampledDiff, samplingReport)

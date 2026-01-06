@@ -2,6 +2,7 @@ package review
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -33,12 +34,18 @@ func NewRepositorySampler(maxTokens int) *RepositorySampler {
 // AdjustForLargeRepository reduces max files for very large repositories
 // Note: Lines of code is not a problem, only number of files matters
 func (s *RepositorySampler) AdjustForLargeRepository(totalFiles int) {
-	// Always limit to 15 files per batch for full repository reviews
-	// This prevents processing too many files at once
+	// For >15 files, we use percentage-based sampling (30% of filtered files, min 15, max 30)
 	if totalFiles > 15 {
-		fmt.Printf("  📦 Large repository detected (%d files). Processing top %d files per batch.\n", totalFiles, s.maxFiles)
+		percentage := float64(totalFiles) * 0.3
+		estimatedFiles := int(percentage)
+		if estimatedFiles < 15 {
+			estimatedFiles = 15
+		}
+		if estimatedFiles > 30 {
+			estimatedFiles = 30
+		}
+		fmt.Printf("  📦 Large repository detected (%d files). Processing up to %d files (30%% of important files, max 30).\n", totalFiles, estimatedFiles)
 	}
-	// maxFiles is already set to 15 in NewRepositorySampler, no need to change it
 }
 
 // SampleRepository samples repository files to fit within the token budget
@@ -71,34 +78,125 @@ func (s *RepositorySampler) SampleRepository(diff *git.Diff, analysisResults map
 
 	// Phase 3: Select files to include
 	selectedFiles := s.selectFiles(risks)
-	report.SampledFiles = len(selectedFiles)
-	report.FilteredFiles = report.TotalFiles - report.SampledFiles
+	// Note: report.SampledFiles will be updated after actual files are included (Phase 4)
+	report.FilteredFiles = report.TotalFiles - len(selectedFiles)
 
-	// Phase 4: Sample selected files
+	// Phase 4: Sample selected files with score-based token allocation
 	sampledDiff := &SampledDiff{
 		Files:         make([]*SampledFile, 0),
 		OriginalFiles: len(diff.Files),
 	}
 
-	tokenBudget := s.maxTokens
+	numSelected := len(selectedFiles)
+	if numSelected == 0 {
+		return sampledDiff, report
+	}
+
+	// Reserve 10% of budget for overhead
+	reservedBudget := s.maxTokens / 10
+	availableBudget := s.maxTokens - reservedBudget
+
+	// Allow up to 15% overage for important files
+	maxBudgetWithOverage := int(float64(s.maxTokens) * 1.15)
+
+	// Calculate total risk score for proportional distribution
+	totalRiskScore := 0
 	for _, risk := range selectedFiles {
+		// Ensure minimum score of 1 for files with negative scores
+		score := risk.Score
+		if score < 1 {
+			score = 1
+		}
+		totalRiskScore += score
+	}
+
+	// Allocate tokens based on risk score proportion
+	tokenAllocations := make([]int, numSelected) // index -> tokens
+	minTokensPerFile := 300  // Minimum tokens per file
+	maxTokensPerFile := 2000 // Maximum tokens per file (prevent one file from dominating)
+
+	totalAllocated := 0
+	for i, risk := range selectedFiles {
+		score := risk.Score
+		if score < 1 {
+			score = 1
+		}
+
+		// Calculate proportional allocation
+		proportion := float64(score) / float64(totalRiskScore)
+		allocated := int(float64(availableBudget) * proportion)
+
+		// Apply min/max constraints
+		if allocated < minTokensPerFile {
+			allocated = minTokensPerFile
+		}
+		if allocated > maxTokensPerFile {
+			allocated = maxTokensPerFile
+		}
+
+		tokenAllocations[i] = allocated
+		totalAllocated += allocated
+	}
+
+	// If allocations exceed available budget, scale down proportionally
+	// But allow up to 15% overage
+	if totalAllocated > availableBudget {
+		if totalAllocated <= maxBudgetWithOverage {
+			// Within 15% overage - allow it
+			availableBudget = totalAllocated
+		} else {
+			// Exceeds 15% overage - scale down to maxBudgetWithOverage
+			scaleFactor := float64(maxBudgetWithOverage) / float64(totalAllocated)
+			for i := range tokenAllocations {
+				tokenAllocations[i] = int(float64(tokenAllocations[i]) * scaleFactor)
+				// Ensure minimum is still respected
+				if tokenAllocations[i] < minTokensPerFile {
+					tokenAllocations[i] = minTokensPerFile
+				}
+			}
+			availableBudget = maxBudgetWithOverage
+		}
+	}
+
+	// Process files with their allocated token budgets
+	tokenBudget := availableBudget
+
+	for i, risk := range selectedFiles {
 		if tokenBudget <= 0 {
 			break
 		}
 
-		sampled := s.sampleFile(risk.File, analysisResults[risk.File.Path], tokenBudget)
+		// Get allocated budget for this file
+		fileBudget := tokenAllocations[i]
+		if tokenBudget < fileBudget {
+			fileBudget = tokenBudget
+		}
+
+		sampled := s.sampleFile(risk.File, analysisResults[risk.File.Path], fileBudget)
 		sampled.RiskScore = risk.Score
 		sampled.RiskReasons = risk.Reasons
 
 		fileTokens := llm.EstimateTokens(sampled.Content)
-		if fileTokens <= tokenBudget {
+
+		// Include file if it fits (within allocated budget or remaining budget)
+		if fileTokens <= fileBudget || (fileTokens <= tokenBudget && fileTokens <= maxTokensPerFile) {
 			sampledDiff.Files = append(sampledDiff.Files, sampled)
 			tokenBudget -= fileTokens
 			sampledDiff.TotalTokens += fileTokens
+		} else if tokenBudget >= minTokensPerFile {
+			// File exceeded its allocation - try with remaining budget (if sufficient)
+			sampled = s.sampleFile(risk.File, analysisResults[risk.File.Path], tokenBudget)
+			fileTokens = llm.EstimateTokens(sampled.Content)
+			if fileTokens <= tokenBudget {
+				sampledDiff.Files = append(sampledDiff.Files, sampled)
+				tokenBudget -= fileTokens
+				sampledDiff.TotalTokens += fileTokens
+			}
 		}
 	}
 
 	report.TotalTokensAfter = sampledDiff.TotalTokens
+	report.SampledFiles = len(sampledDiff.Files) // Update with actual files included
 
 	return sampledDiff, report
 }
@@ -175,10 +273,16 @@ func (s *RepositorySampler) calculateRiskScores(files []*git.DiffFile, analysisR
 			risk.Reasons = append(risk.Reasons, "core-logic")
 		}
 
-		// Database/API interaction
+		// Database/API interaction (path-based check - keep for backward compatibility)
 		if isDatabaseOrAPI(file.Path) {
 			risk.Score += 7
 			risk.Reasons = append(risk.Reasons, "database/api")
+		}
+
+		// Database/ORM calls in content (more accurate detection)
+		if analysis != nil && hasDatabaseOrORMCalls(analysis) {
+			risk.Score += 7 // Same weight as path-based check
+			risk.Reasons = append(risk.Reasons, "database/orm-calls")
 		}
 
 		// High complexity from static analysis
@@ -228,12 +332,128 @@ func (s *RepositorySampler) calculateRiskScores(files []*git.DiffFile, analysisR
 	return risks
 }
 
-// selectFiles selects top N files by risk score
+// hasDatabaseOrORMCalls checks if a file contains database or ORM calls
+func hasDatabaseOrORMCalls(analysis *analysispkg.FileAnalysis) bool {
+	// Check imports for database/ORM libraries
+	for _, imp := range analysis.Imports {
+		importPath := strings.ToLower(imp.Path)
+		
+		// Python database/ORM imports
+		if strings.Contains(importPath, "sqlalchemy") ||
+			strings.Contains(importPath, "django.db") ||
+			strings.Contains(importPath, "peewee") ||
+			strings.Contains(importPath, "sqlite3") ||
+			strings.Contains(importPath, "psycopg2") ||
+			strings.Contains(importPath, "mysql") ||
+			strings.Contains(importPath, "pymongo") ||
+			strings.Contains(importPath, "sqlmodel") {
+			return true
+		}
+		
+		// JavaScript/TypeScript database/ORM imports
+		if strings.Contains(importPath, "sequelize") ||
+			strings.Contains(importPath, "prisma") ||
+			strings.Contains(importPath, "typeorm") ||
+			strings.Contains(importPath, "mongoose") ||
+			strings.Contains(importPath, "knex") ||
+			strings.Contains(importPath, "bookshelf") {
+			return true
+		}
+		
+		// Go database/ORM imports
+		if strings.Contains(importPath, "database/sql") ||
+			strings.Contains(importPath, "gorm.io/gorm") ||
+			strings.Contains(importPath, "github.com/jmoiron/sqlx") ||
+			strings.Contains(importPath, "gorm.io/driver") {
+			return true
+		}
+		
+		// Java database/ORM imports
+		if strings.Contains(importPath, "javax.persistence") ||
+			strings.Contains(importPath, "org.hibernate") ||
+			strings.Contains(importPath, "org.springframework.data") ||
+			strings.Contains(importPath, "jakarta.persistence") {
+			return true
+		}
+	}
+	
+	// Check function bodies for database/ORM method calls
+	dbMethodPatterns := []string{
+		// Python patterns
+		`\.query\(`, `\.filter\(`, `\.get\(`, `\.save\(`, `\.delete\(`, `\.create\(`, `\.update\(`,
+		`execute\(`, `cursor\(`, `\.session\(`, `\.commit\(`, `\.rollback\(`,
+		// JavaScript/TypeScript patterns
+		`\.findOne\(`, `\.findAll\(`, `\.create\(`, `\.update\(`, `\.destroy\(`, `\.save\(`, `\.query\(`,
+		`\.find\(`, `\.findById\(`, `\.findOneAndUpdate\(`, `\.findOneAndDelete\(`,
+		// Go patterns
+		`\.Query\(`, `\.QueryRow\(`, `\.Exec\(`, `\.First\(`, `\.Find\(`, `\.Create\(`, `\.Save\(`,
+		`\.Update\(`, `\.Delete\(`, `\.Where\(`, `\.Select\(`,
+		// Java patterns
+		`\.save\(`, `\.findById\(`, `\.findAll\(`, `\.delete\(`, `\.persist\(`, `\.merge\(`,
+		`\.createQuery\(`, `\.getResultList\(`, `\.executeUpdate\(`,
+	}
+	
+	// Compile regex patterns for method calls
+	patterns := make([]*regexp.Regexp, 0, len(dbMethodPatterns))
+	for _, pattern := range dbMethodPatterns {
+		re, err := regexp.Compile("(?i)" + pattern)
+		if err == nil {
+			patterns = append(patterns, re)
+		}
+	}
+	
+	// Check all function bodies
+	for _, fn := range analysis.Functions {
+		if fn.Body == "" {
+			continue
+		}
+		
+		bodyLower := strings.ToLower(fn.Body)
+		
+		// Check against compiled patterns
+		for _, pattern := range patterns {
+			if pattern.MatchString(fn.Body) {
+				return true
+			}
+		}
+		
+		// Additional simple string checks for common patterns
+		if strings.Contains(bodyLower, "db.query") ||
+			strings.Contains(bodyLower, "db.execute") ||
+			strings.Contains(bodyLower, "db.session") ||
+			strings.Contains(bodyLower, "model.save") ||
+			strings.Contains(bodyLower, "model.create") ||
+			strings.Contains(bodyLower, "model.update") ||
+			strings.Contains(bodyLower, "model.delete") ||
+			strings.Contains(bodyLower, "orm.query") ||
+			strings.Contains(bodyLower, "orm.save") {
+			return true
+		}
+	}
+	
+	return false
+}
+
+// selectFiles selects files based on percentage of total, with min/max constraints
 func (s *RepositorySampler) selectFiles(risks []FileRisk) []FileRisk {
-	if len(risks) <= s.maxFiles {
+	totalFiltered := len(risks)
+	
+	// If 15 or fewer files, include all
+	if totalFiltered <= 15 {
 		return risks
 	}
-	return risks[:s.maxFiles]
+	
+	// For >15 files: min 15, max 30% of total, final cap at 30
+	percentage := float64(totalFiltered) * 0.3
+	maxFiles := int(percentage)
+	if maxFiles < 15 {
+		maxFiles = 15 // Minimum guarantee
+	}
+	if maxFiles > 30 {
+		maxFiles = 30 // Final absolute maximum cap
+	}
+	
+	return risks[:maxFiles]
 }
 
 // sampleFile samples a single file to reduce its size

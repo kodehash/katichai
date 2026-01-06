@@ -10,17 +10,19 @@ import (
 
 // ReviewReport represents the final synthesized review
 type ReviewReport struct {
-	Summary         string                            `json:"summary"`
-	Score           int                               `json:"score"`
-	Status          string                            `json:"status"` // PASS or FAIL
-	Issues          []ReviewIssue                     `json:"issues"`
-	Suggestions     []string                          `json:"suggestions"`
-	FileAnalysis    map[string]*analysis.FileAnalysis `json:"file_analysis,omitempty"`
-	TokensUsed      TokenUsage                        `json:"tokens_used"`
-	DuplicateBlocks []DuplicateBlockInfo              `json:"duplicate_blocks,omitempty"`
-	AIPatterns      map[string][]analysis.AICodePattern `json:"ai_patterns,omitempty"`
-	SamplingInfo    *SamplingInfo                     `json:"sampling_info,omitempty"`
-	ComplexityIssues []ComplexityIssue                `json:"complexity_issues,omitempty"`
+	Summary              string                            `json:"summary"`
+	Score                int                               `json:"score"`
+	Status               string                            `json:"status"` // PASS or FAIL
+	Issues               []ReviewIssue                      `json:"issues"`
+	Suggestions          []string                          `json:"suggestions"`
+	FileAnalysis         map[string]*analysis.FileAnalysis `json:"file_analysis,omitempty"`
+	TokensUsed           TokenUsage                        `json:"tokens_used"`
+	DuplicateBlocks      []DuplicateBlockInfo              `json:"duplicate_blocks,omitempty"`
+	AIPatterns           map[string][]analysis.AICodePattern `json:"ai_patterns,omitempty"`
+	SamplingInfo         *SamplingInfo                     `json:"sampling_info,omitempty"`
+	ComplexityIssues     []ComplexityIssue                 `json:"complexity_issues,omitempty"`
+	SimilarityCheckLimited bool                            `json:"similarity_check_limited,omitempty"`
+	SimilarityCheckReason  string                          `json:"similarity_check_reason,omitempty"`
 }
 
 // ComplexityIssue represents an unnecessarily complex code block or architectural pattern
@@ -86,12 +88,14 @@ func NewSynthesizer() *Synthesizer {
 }
 
 // Synthesize combines LLM output with static analysis
-func (s *Synthesizer) Synthesize(llmOutput string, staticIssues []analysis.Issue, duplicates []string, fileAnalysis map[string]*analysis.FileAnalysis, tokensUsed TokenUsage) *ReviewReport {
+func (s *Synthesizer) Synthesize(llmOutput string, staticIssues []analysis.Issue, duplicates []string, fileAnalysis map[string]*analysis.FileAnalysis, tokensUsed TokenUsage, similarityLimited bool, similarityReason string) *ReviewReport {
 	report := &ReviewReport{
 		// Status:       "PASS",  // Commented out - scoring is subjective
 		// Score:        100,      // Commented out - scoring is subjective
-		FileAnalysis: fileAnalysis,
-		TokensUsed:   tokensUsed,
+		FileAnalysis:           fileAnalysis,
+		TokensUsed:             tokensUsed,
+		SimilarityCheckLimited: similarityLimited,
+		SimilarityCheckReason:  similarityReason,
 	}
 
 	// 1. Parse LLM Output

@@ -141,35 +141,36 @@ func (d *AICodeDetector) CalculateConfidence(fn FunctionInfo, language string) (
 	baseConfidence := 0.0
 	
 	// Use language-specific pattern detection
+	// Reduced base confidence contribution to make detection less sensitive
 	switch language {
 	case "Java":
 		detected, langIndicators := detectJavaPatterns(fn)
 		if detected {
-			baseConfidence += 0.4
+			baseConfidence += 0.25 // Reduced from 0.4
 			indicators = append(indicators, langIndicators...)
 		}
 	case "Python":
 		detected, langIndicators := detectPythonPatterns(fn)
 		if detected {
-			baseConfidence += 0.4
+			baseConfidence += 0.25 // Reduced from 0.4
 			indicators = append(indicators, langIndicators...)
 		}
 	case "Go":
 		detected, langIndicators := detectGoPatterns(fn)
 		if detected {
-			baseConfidence += 0.4
+			baseConfidence += 0.25 // Reduced from 0.4
 			indicators = append(indicators, langIndicators...)
 		}
 	case "JavaScript", "TypeScript":
 		detected, langIndicators := detectJSPatterns(fn)
 		if detected {
-			baseConfidence += 0.4
+			baseConfidence += 0.25 // Reduced from 0.4
 			indicators = append(indicators, langIndicators...)
 		}
 	case "C#":
 		detected, langIndicators := detectCSharpPatterns(fn)
 		if detected {
-			baseConfidence += 0.4
+			baseConfidence += 0.25 // Reduced from 0.4
 			indicators = append(indicators, langIndicators...)
 		}
 	}
