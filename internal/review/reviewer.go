@@ -85,10 +85,21 @@ func (r *Reviewer) ReviewDiff(diff *git.Diff) (*ReviewResult, error) {
 		return nil, fmt.Errorf("analysis failed: %w", err)
 	}
 	result.FileAnalysis = fileAnalyses
+	fmt.Printf("   [DEBUG] Static analysis returned %d files\n", len(fileAnalyses))
 
 	// 2. Similarity / Duplication Check
-	if r.hasContext {
+	// Skip similarity checks for large repositories (>100 files) as they're too slow
+	// Similarity checks are more useful for diff reviews, not full repository reviews
+	fmt.Println("   [DEBUG] Starting similarity/duplication check...")
+	fmt.Printf("   [DEBUG] hasContext: %v\n", r.hasContext)
+	if r.hasContext && len(fileAnalyses) <= 100 {
+		fmt.Printf("   [DEBUG] Processing %d files for similarity check...\n", len(fileAnalyses))
+		fileCount := 0
 		for filePath, fileAnalysis := range fileAnalyses {
+			fileCount++
+			if fileCount%50 == 0 {
+				fmt.Printf("   [DEBUG] Processing similarity for file %d/%d: %s\n", fileCount, len(fileAnalyses), filePath)
+			}
 			// Create trivial detector for this language
 			trivialDetector := analysis.NewTrivialPatternDetector(fileAnalysis.Language)
 			
@@ -113,6 +124,9 @@ func (r *Reviewer) ReviewDiff(diff *git.Diff) (*ReviewResult, error) {
 					fn.Name, 
 					float32(r.config.Analysis.DuplicateThreshold),
 				)
+				if err != nil {
+					fmt.Printf("   [DEBUG] Error detecting duplicates for %s::%s: %v\n", filePath, fn.Name, err)
+				}
 				
 				if err == nil && len(duplicates) > 0 {
 					// Further filter: only report if LOC and complexity are similar
@@ -153,8 +167,16 @@ func (r *Reviewer) ReviewDiff(diff *git.Diff) (*ReviewResult, error) {
 				}
 			}
 		}
+		fmt.Println("   [DEBUG] Similarity check complete")
+	} else {
+		if len(fileAnalyses) > 100 {
+			fmt.Printf("   [DEBUG] Skipping similarity check (too many files: %d, limit: 100)\n", len(fileAnalyses))
+		} else {
+			fmt.Println("   [DEBUG] Skipping similarity check (no context)")
+		}
 	}
 
+	fmt.Println("   [DEBUG] ReviewDiff returning successfully")
 	return result, nil
 }
 

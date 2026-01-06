@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/katichai/katich/internal/context"
 )
@@ -260,22 +262,81 @@ func (a *Analyzer) getTopByLength(functions []FunctionInfo, n int) []FunctionInf
 }
 
 // AnalyzeChangedFiles analyzes only the files that changed in a diff
+// Processes files in parallel for better performance, especially for Python files
 func (a *Analyzer) AnalyzeChangedFiles(changedFiles []string) (map[string]*FileAnalysis, error) {
 	results := make(map[string]*FileAnalysis)
-
+	resultsMutex := &sync.Mutex{}
+	
+	// Filter source files first
+	sourceFiles := make([]string, 0)
 	for _, file := range changedFiles {
 		fullPath := filepath.Join(a.rootPath, file)
+		if a.isSourceFile(fullPath) {
+			sourceFiles = append(sourceFiles, file)
+		}
+	}
+	
+	if len(sourceFiles) == 0 {
+		return results, nil
+	}
+	
+	// Process files in parallel with limited concurrency
+	// Use a semaphore to limit concurrent goroutines (avoid overwhelming system)
+	maxConcurrent := 10 // Process up to 10 files at once
+	semaphore := make(chan struct{}, maxConcurrent)
+	
+	var wg sync.WaitGroup
+	processedCount := 0
+	processedMutex := &sync.Mutex{}
+	
+	// Show progress for large batches
+	showProgress := len(sourceFiles) > 20
+	var lastProgressUpdate time.Time
+	lastProgressUpdateMutex := &sync.Mutex{}
+	
+	for _, file := range sourceFiles {
+		wg.Add(1)
+		semaphore <- struct{}{} // Acquire semaphore
 		
-		if !a.isSourceFile(fullPath) {
-			continue
-		}
-
-		analysis, err := a.analyzeFile(fullPath)
-		if err != nil {
-			continue
-		}
-
-		results[file] = analysis
+		go func(filePath string) {
+			defer wg.Done()
+			defer func() { <-semaphore }() // Release semaphore
+			
+			fullPath := filepath.Join(a.rootPath, filePath)
+			analysis, err := a.analyzeFile(fullPath)
+			
+			if err == nil {
+				resultsMutex.Lock()
+				results[filePath] = analysis
+				resultsMutex.Unlock()
+			}
+			
+			// Update progress counter and show progress
+			processedMutex.Lock()
+			processedCount++
+			currentCount := processedCount
+			processedMutex.Unlock()
+			
+			// Show progress every 500ms for large batches
+			if showProgress {
+				lastProgressUpdateMutex.Lock()
+				shouldUpdate := time.Since(lastProgressUpdate) > 500*time.Millisecond
+				if shouldUpdate {
+					fmt.Printf("   ⏳ Analyzing files: %d/%d (%.0f%%)\r", currentCount, len(sourceFiles), float64(currentCount)/float64(len(sourceFiles))*100)
+					lastProgressUpdate = time.Now()
+				}
+				lastProgressUpdateMutex.Unlock()
+			}
+		}(file)
+	}
+	
+	wg.Wait()
+	
+	// Clear progress line and show completion
+	if showProgress {
+		// Clear the progress line
+		fmt.Print("\r" + strings.Repeat(" ", 50) + "\r")
+		fmt.Printf("   ✓ Analyzed %d files\n", len(results))
 	}
 
 	return results, nil

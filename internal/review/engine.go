@@ -25,6 +25,13 @@ type ReviewEngine struct {
 	diffRange   string // Stores the diff range for HTML report
 }
 
+// Limits for full repository reviews to prevent excessive runtime
+// These are hard limits that prevent the review from starting
+const (
+	MAX_FILES_FULL_REVIEW_LIMIT = 3000   // Maximum number of files allowed for full review
+	MAX_LINES_FULL_REVIEW_LIMIT = 300000 // Maximum total lines of code allowed for full review
+)
+
 // LineRange represents a range of line numbers
 type LineRange struct {
 	Start int
@@ -533,35 +540,100 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 	// Set diff range to indicate full repository review
 	e.diffRange = "full repository"
 
+	// Validate repository size before starting review
+	// Note: Lines of code is not a problem, only number of files matters
+	fileCount := len(diff.Files)
+	
+	if fileCount > MAX_FILES_FULL_REVIEW_LIMIT {
+		return nil, fmt.Errorf(
+			"repository too large for full review: %d files (max: %d). "+
+				"Full repository reviews are limited to prevent excessive runtime (>15 min). "+
+				"Consider reviewing specific files or commits instead.",
+			fileCount, MAX_FILES_FULL_REVIEW_LIMIT,
+		)
+	}
+	
+	// Calculate total lines for display only (not used for validation)
+	totalLines := 0
+	for _, file := range diff.Files {
+		totalLines += file.Additions
+	}
+	
+	fmt.Printf("📏 Repository size: %d files, %d lines of code\n", fileCount, totalLines)
+
 	// 1. Run Local Analysis (Static + Similarity)
+	fmt.Println("📊 Running static analysis on repository files...")
 	localResult, err := e.reviewer.ReviewDiff(diff)
 	if err != nil {
 		return nil, fmt.Errorf("local analysis failed: %w", err)
 	}
+	fmt.Printf("   ✓ Analyzed %d files\n", len(localResult.FileAnalysis))
+	fmt.Println("   [DEBUG] Static analysis complete, proceeding to classification...")
 
 	// 1.5 Run Classifier (optional for full repo, but useful for context)
+	fmt.Println("🔍 Classifying repository changes...")
+	fmt.Println("   [DEBUG] Starting classification step...")
+	fmt.Println("   ⏳ Preparing classification input...")
 	classifier := llm.NewClassifier(e.llmClient)
-	diffStr := formatDiff(diff)
 	
-	// Truncate diff for classifier if too large
-	classifyDiff := diffStr
-	if len(classifyDiff) > 2000 {
-		classifyDiff = classifyDiff[:2000] + "\n... (truncated)"
+	// For full repo reviews, don't format the entire diff (too slow for 263 files)
+	// Just use a summary instead
+	fmt.Println("   ⏳ Building classification summary...")
+	var classifyDiff string
+	if len(diff.Files) > 50 {
+		// For large repos, just use file names and stats
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("Full repository review: %d files, %d lines\n", len(diff.Files), totalLines))
+		sb.WriteString("Sample files:\n")
+		for i, file := range diff.Files {
+			if i >= 10 {
+				break
+			}
+			sb.WriteString(fmt.Sprintf("  - %s (%d additions)\n", file.Path, file.Additions))
+		}
+		classifyDiff = sb.String()
+		fmt.Printf("   ✓ Classification summary ready (%d chars)\n", len(classifyDiff))
+	} else {
+		fmt.Println("   ⏳ Formatting diff for classification...")
+		diffStr := formatDiff(diff)
+		// Truncate diff for classifier if too large
+		classifyDiff = diffStr
+		if len(classifyDiff) > 2000 {
+			classifyDiff = classifyDiff[:2000] + "\n... (truncated)"
+		}
+		fmt.Printf("   ✓ Diff formatted (%d chars)\n", len(classifyDiff))
 	}
 	
-	classification, err := classifier.ClassifyChanges(context.Background(), classifyDiff)
+	// Use timeout for classifier too
+	fmt.Println("   ⏳ Calling LLM classifier (timeout: 2 minutes)...")
+	classifyCtx, classifyCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer classifyCancel()
+	
+	classification, err := classifier.ClassifyChanges(classifyCtx, classifyDiff)
 	if err != nil {
-		fmt.Printf("Warning: Classification failed: %v\n", err)
+		if classifyCtx.Err() == context.DeadlineExceeded {
+			fmt.Printf("⚠️  Classification timed out, continuing without classification\n")
+		} else {
+			fmt.Printf("⚠️  Classification failed: %v\n", err)
+		}
 		classification = llm.ClassificationResult{Type: llm.ClassUnknown}
+	} else {
+		fmt.Printf("   ✓ Classification: %s (%.0f%% confidence)\n", classification.Type, classification.Confidence*100)
 	}
 
 	// 2. Extract Static Issues and Duplicates
+	fmt.Println("🔎 Extracting static analysis issues and duplicates...")
+	fmt.Println("   ⏳ Initializing duplicate detector...")
 	staticIssues := make([]analysis.Issue, 0)
 	duplicateWarnings := make([]string, 0)
 
 	// Initialize detectors
 	exactDupDetector := analysis.NewExactDuplicationDetector()
+	fmt.Println("   ✓ Duplicate detector initialized")
 
+	analysisFileCount := len(localResult.FileAnalysis)
+	fmt.Printf("   ⏳ Processing %d files for issues and duplicates...\n", analysisFileCount)
+	processedFiles := 0
 	for path, fileAnalysis := range localResult.FileAnalysis {
 		// Add functions for exact duplication detection
 		for _, fn := range fileAnalysis.Functions {
@@ -577,9 +649,21 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 			}
 			staticIssues = append(staticIssues, issue)
 		}
+		
+		processedFiles++
+		// Show progress for large batches
+		if analysisFileCount > 100 && processedFiles%50 == 0 {
+			fmt.Printf("   ⏳ Processing files: %d/%d\r", processedFiles, analysisFileCount)
+		}
 	}
+	
+	if analysisFileCount > 100 {
+		fmt.Printf("   ✓ Processed %d files\n", processedFiles)
+	}
+	fmt.Printf("   ✓ Collected %d static issues\n", len(staticIssues))
 
 	// Check for exact duplicates
+	fmt.Println("   ⏳ Checking for exact duplicates...")
 	for _, dups := range exactDupDetector.GetDuplicates() {
 		if len(dups) > 1 {
 			var locs []string
@@ -592,6 +676,7 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 	}
 
 	// Extract similarity-based duplicate warnings
+	fmt.Println("   ⏳ Checking similarity-based duplicates...")
 	for _, dups := range localResult.Duplicates {
 		for _, d := range dups {
 			duplicateWarnings = append(duplicateWarnings,
@@ -600,14 +685,18 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 	}
 
 	// Report Reuse Candidates
+	fmt.Println("   ⏳ Checking reuse candidates...")
 	for _, candidates := range localResult.ReuseCandidates {
 		for _, c := range candidates {
 			duplicateWarnings = append(duplicateWarnings,
 				fmt.Sprintf("Refactoring Opportunity: Similar logic in %s (Match: %.1f%%)", c.FilePath, c.Similarity*100))
 		}
 	}
+	fmt.Printf("   ✓ Found %d duplicate warnings\n", len(duplicateWarnings))
 
 	// 3. Calculate Token Budget and Sample Repository
+	fmt.Println("📦 Sampling repository files to fit token budget...")
+	fmt.Println("   ⏳ Calculating token budget...")
 	// Use larger budget for full repository review
 	diffBudget := FULL_REVIEW_TOKEN_BUDGET - SYSTEM_PROMPT_TOKENS - CONTEXT_TOKENS_AVG - BUFFER_TOKENS
 	if diffBudget > 25000 {
@@ -615,8 +704,32 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 	}
 
 	// Sample the repository using intelligent sampling
+	fmt.Println("   ⏳ Initializing repository sampler...")
 	sampler := NewRepositorySampler(diffBudget)
+	fmt.Printf("   ✓ Sampler initialized (token budget: %d)\n", diffBudget)
+	
+	// Adjust sampling for very large repositories
+	fmt.Println("   ⏳ Adjusting sampler for repository size...")
+	sampler.AdjustForLargeRepository(len(diff.Files))
+	
+	// Count Python files for additional optimization
+	fmt.Println("   ⏳ Analyzing file types...")
+	pythonFileCount := 0
+	for _, file := range diff.Files {
+		if strings.HasSuffix(file.Path, ".py") {
+			pythonFileCount++
+		}
+	}
+	
+	// For Python-heavy repos, be more aggressive with sampling
+	if pythonFileCount > len(diff.Files)/2 {
+		fmt.Printf("  📊 Python-heavy repository detected (%d Python files). Applying optimized sampling.\n", pythonFileCount)
+	}
+	
+	fmt.Println("   ⏳ Sampling repository files (this may take a moment)...")
 	sampledDiff, samplingReport := sampler.SampleRepository(diff, localResult.FileAnalysis)
+	fmt.Println("   ✓ Sampling complete")
+	fmt.Printf("   ✓ Sampling complete: %d files selected from %d total\n", samplingReport.SampledFiles, samplingReport.TotalFiles)
 
 	// Display sampling report to user
 	fmt.Println("\n📊 Sampling Report:")
@@ -641,10 +754,14 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 	fmt.Println()
 
 	// 4. Build Review Context for LLM with sampled diff
+	fmt.Println("📝 Building review prompt for LLM...")
+	fmt.Println("   ⏳ Formatting sampled diff...")
 	diffString := sampledDiff.Format()
+	fmt.Printf("   ✓ Diff formatted (%d chars)\n", len(diffString))
 
 	// Truncate static issues and duplicate warnings to prevent information overload
 	// Use higher limits for full repo reviews since we have more token capacity
+	fmt.Println("   ⏳ Truncating static issues and duplicates...")
 	const MAX_STATIC_ISSUES_FULL_REPO = 30
 	const MAX_DUPLICATE_WARNINGS_FULL_REPO = 20
 	
@@ -653,12 +770,15 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 		// Prioritize high-severity issues
 		truncatedStaticIssues = prioritizeIssues(staticIssues, MAX_STATIC_ISSUES_FULL_REPO)
 	}
+	fmt.Printf("   ✓ Static issues: %d (truncated from %d)\n", len(truncatedStaticIssues), len(staticIssues))
 	
 	truncatedDuplicateWarnings := duplicateWarnings
 	if len(truncatedDuplicateWarnings) > MAX_DUPLICATE_WARNINGS_FULL_REPO {
 		truncatedDuplicateWarnings = duplicateWarnings[:MAX_DUPLICATE_WARNINGS_FULL_REPO]
 	}
+	fmt.Printf("   ✓ Duplicate warnings: %d (truncated from %d)\n", len(truncatedDuplicateWarnings), len(duplicateWarnings))
 
+	fmt.Println("   ⏳ Building review context...")
 	reviewCtx := llm.ReviewContext{
 		Diff:           diffString,
 		Frameworks:     []string{}, // TODO: Load from context.json if available
@@ -668,15 +788,54 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 		FileContext:    fmt.Sprintf("Full repository review: %d files (Sampled: %d/%d files)", len(diff.Files), samplingReport.SampledFiles, samplingReport.TotalFiles),
 		Classification: fmt.Sprintf("%s (Confidence: %.2f)", classification.Type, classification.Confidence),
 	}
+	fmt.Println("   ✓ Review context built")
 
 	// 5. Generate Prompt (with full repository context)
+	fmt.Println("   ⏳ Building LLM prompt...")
 	prompt := e.pmtBuilder.BuildReviewPrompt(reviewCtx, true) // true = isFullRepository
+	fmt.Printf("   ✓ Prompt built (%d chars)\n", len(prompt))
 
-	// 6. Query LLM
+	// 5.5. Validate prompt size and determine if chunking is needed
+	modelLimit := llm.GetModelTokenLimit(e.llmClient.GetModel())
+	valid, totalTokens, validationErr := llm.ValidatePromptSize(llm.SystemPrompt, prompt, modelLimit, 1000)
+	
+	if !valid {
+		fmt.Printf("⚠️  Prompt size (%d tokens) exceeds model limit (%d tokens). Using chunked review for full repository...\n", totalTokens, modelLimit)
+		return e.performChunkedFullRepositoryReview(diff, localResult, staticIssues, duplicateWarnings, &classification, sampledDiff, samplingReport, exactDupDetector)
+	}
+	
+	_ = validationErr // Suppress unused variable warning
+
+	// 6. Query LLM with timeout
 	fmt.Println("🤖 Querying LLM for comprehensive repository review...")
+	fmt.Printf("   📝 Prompt size: ~%d tokens (model limit: %d)\n", totalTokens, modelLimit)
+	fmt.Println("   ⏱️  This may take several minutes for large repositories...")
+	
+	// Add timeout context (15 minutes for full repo reviews)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	
+	// Start a goroutine to show progress
+	progressDone := make(chan bool)
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				fmt.Println("   ⏳ Still processing... (this is normal for large repositories)")
+			case <-progressDone:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	defer func() { progressDone <- true }()
+	
 	// Use high token limit for full repository reviews to ensure all issues are captured
 	// MaxTokens=0 tells providers to use their max (Anthropic: 32768, OpenAI: handled by provider)
-	resp, err := e.llmClient.GenerateCompletion(context.Background(), llm.CompletionRequest{
+	resp, err := e.llmClient.GenerateCompletion(ctx, llm.CompletionRequest{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: llm.SystemPrompt},
 			{Role: llm.RoleUser, Content: prompt},
@@ -685,10 +844,16 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 		MaxTokens:   0, // No limit - let provider use max tokens for comprehensive output
 	})
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("LLM review timed out after 15 minutes. The repository is too large for a single review. The system will automatically use chunked review for repositories this large")
+		}
 		return nil, fmt.Errorf("LLM review failed: %w", err)
 	}
+	
+	fmt.Println("   ✓ LLM review completed successfully")
 
 	// 7. Synthesize Report with token usage
+	fmt.Println("📋 Synthesizing review report...")
 	tokenUsage := TokenUsage{
 		InputTokens:  resp.Usage.PromptTokens,
 		OutputTokens: resp.Usage.CompletionTokens,
@@ -713,6 +878,174 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 		}
 	}
 
+	return report, nil
+}
+
+// performChunkedFullRepositoryReview handles full repository reviews that exceed token limits by splitting into chunks
+func (e *ReviewEngine) performChunkedFullRepositoryReview(
+	diff *git.Diff,
+	localResult *ReviewResult,
+	staticIssues []analysis.Issue,
+	duplicateWarnings []string,
+	classification *llm.ClassificationResult,
+	sampledDiff *SampledDiff,
+	samplingReport *SamplingReport,
+	exactDupDetector *analysis.ExactDuplicationDetector,
+) (*ReviewReport, error) {
+	
+	// 1. Create chunks
+	modelLimit := llm.GetModelTokenLimit(e.llmClient.GetModel())
+	chunker := NewReviewChunker(
+		modelLimit,
+		1000, // buffer
+	)
+	
+	frameworks := []string{} // TODO: Load from context.json if available
+	languages := detectLanguages(diff)
+	classificationStr := fmt.Sprintf("%s (Confidence: %.2f)", classification.Type, classification.Confidence)
+	
+	chunks, err := chunker.CreateChunks(sampledDiff, staticIssues, duplicateWarnings, frameworks, languages, classificationStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create chunks: %w", err)
+	}
+	
+	fmt.Printf("📦 Split full repository review into %d chunks for parallel processing\n", len(chunks))
+	
+	// 2. Process chunks in parallel using goroutines with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute) // Longer timeout for full repo
+	defer cancel()
+	
+	resultChan := make(chan ChunkResult, len(chunks))
+	
+	// Rate limiter: max concurrent requests (avoid API throttling)
+	maxConcurrent := 3
+	semaphore := make(chan struct{}, maxConcurrent)
+	
+	for _, chunk := range chunks {
+		// Acquire semaphore
+		semaphore <- struct{}{}
+		
+		go func(c *ReviewChunk) {
+			defer func() { <-semaphore }()
+			
+			fmt.Printf("🤖 Reviewing chunk %d/%d...\n", c.ID, len(chunks))
+			
+			chunkPrompt := buildChunkPrompt(c)
+			
+			// Calculate available tokens for completion
+			inputTokens := llm.EstimateTokens(llm.SystemPrompt) + llm.EstimateTokens(chunkPrompt)
+			maxOutputTokens := modelLimit - inputTokens - 500 // 500 buffer
+			
+			// Cap at reasonable maximum
+			if maxOutputTokens > 4096 {
+				maxOutputTokens = 4096
+			}
+			if maxOutputTokens < 512 {
+				maxOutputTokens = 512 // Minimum to provide useful response
+			}
+			
+			// Use context with timeout for each chunk
+			chunkCtx, chunkCancel := context.WithTimeout(ctx, 5*time.Minute)
+			defer chunkCancel()
+			
+			resp, err := e.llmClient.GenerateCompletion(chunkCtx, llm.CompletionRequest{
+				Messages: []llm.Message{
+					{Role: llm.RoleSystem, Content: llm.SystemPrompt},
+					{Role: llm.RoleUser, Content: chunkPrompt},
+				},
+				Temperature: 0.2,
+				MaxTokens:   maxOutputTokens,
+			})
+			
+			result := ChunkResult{ChunkID: c.ID}
+			if err != nil {
+				if chunkCtx.Err() == context.DeadlineExceeded {
+					result.Error = fmt.Errorf("chunk %d review timed out after 5 minutes", c.ID)
+				} else {
+					result.Error = fmt.Errorf("chunk %d review failed: %w", c.ID, err)
+				}
+			} else {
+				result.Content = resp.Content
+				result.InputTokens = resp.Usage.PromptTokens
+				result.OutputTokens = resp.Usage.CompletionTokens
+			}
+			
+			resultChan <- result
+		}(chunk)
+	}
+	
+	// Wait for all goroutines to complete or timeout
+	results := make([]ChunkResult, 0, len(chunks))
+	completed := 0
+	for i := 0; i < len(chunks); i++ {
+		select {
+		case result := <-resultChan:
+			completed++
+			if result.Error != nil {
+				fmt.Printf("⚠️  Chunk %d failed: %v\n", result.ChunkID, result.Error)
+				// Continue processing other chunks instead of failing immediately
+				continue
+			}
+			results = append(results, result)
+		case <-ctx.Done():
+			close(resultChan)
+			return nil, fmt.Errorf("full repository review timed out after 20 minutes. Only %d/%d chunks completed", completed, len(chunks))
+		}
+	}
+	close(resultChan)
+	
+	if len(results) == 0 {
+		return nil, fmt.Errorf("all chunks failed during full repository review")
+	}
+	
+	// Sort results by chunk ID to maintain order
+	for i := 0; i < len(results)-1; i++ {
+		for j := 0; j < len(results)-i-1; j++ {
+			if results[j].ChunkID > results[j+1].ChunkID {
+				results[j], results[j+1] = results[j+1], results[j]
+			}
+		}
+	}
+	
+	// Extract responses in order
+	var allResponses []string
+	var totalInputTokens, totalOutputTokens int
+	for _, result := range results {
+		allResponses = append(allResponses, result.Content)
+		totalInputTokens += result.InputTokens
+		totalOutputTokens += result.OutputTokens
+	}
+	
+	// 3. Merge chunk results
+	fmt.Println("🔄 Merging chunk results...")
+	mergedContent := e.mergeChunkResults(allResponses)
+	
+	// 4. For full repo reviews, don't filter - we want all issues
+	// (filterLLMOutputToChanges is for diff reviews only)
+	
+	// 5. Synthesize final report
+	tokenUsage := TokenUsage{
+		InputTokens:  totalInputTokens,
+		OutputTokens: totalOutputTokens,
+		TotalTokens:  totalInputTokens + totalOutputTokens,
+	}
+	
+	report := e.synthesizer.Synthesize(mergedContent, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage)
+	
+	// 6. Populate sampling information
+	e.populateSamplingInfo(report, diff, sampledDiff, samplingReport)
+	
+	// 7. Populate duplicate blocks and AI patterns for HTML report
+	e.populateDuplicateBlocks(report, exactDupDetector, localResult, diff)
+	e.populateAIPatternsFullRepo(report, localResult)
+	
+	// 8. Generate HTML report if enabled
+	if e.shouldGenerateHTML() {
+		if err := e.generateHTMLReport(report, diff, e.diffRange); err != nil {
+			fmt.Printf("Warning: Failed to generate HTML report: %v\n", err)
+		}
+	}
+	
 	return report, nil
 }
 

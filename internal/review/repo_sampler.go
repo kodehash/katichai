@@ -30,6 +30,17 @@ func NewRepositorySampler(maxTokens int) *RepositorySampler {
 	}
 }
 
+// AdjustForLargeRepository reduces max files for very large repositories
+// Note: Lines of code is not a problem, only number of files matters
+func (s *RepositorySampler) AdjustForLargeRepository(totalFiles int) {
+	// Always limit to 15 files per batch for full repository reviews
+	// This prevents processing too many files at once
+	if totalFiles > 15 {
+		fmt.Printf("  📦 Large repository detected (%d files). Processing top %d files per batch.\n", totalFiles, s.maxFiles)
+	}
+	// maxFiles is already set to 15 in NewRepositorySampler, no need to change it
+}
+
 // SampleRepository samples repository files to fit within the token budget
 func (s *RepositorySampler) SampleRepository(diff *git.Diff, analysisResults map[string]*analysispkg.FileAnalysis) (*SampledDiff, *SamplingReport) {
 	report := &SamplingReport{

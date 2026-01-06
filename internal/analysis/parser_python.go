@@ -2,11 +2,13 @@ package analysis
 
 import (
 	_ "embed"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 )
 
 //go:embed python_ast_helper.py
@@ -121,12 +123,22 @@ func (p *PythonParser) getOrCreateScriptFile() (string, error) {
 	return p.scriptPath, nil
 }
 
-// callPythonHelper executes the Python helper script
+// callPythonHelper executes the Python helper script with a timeout
+// If parsing takes too long (e.g., very large files or syntax errors), it will timeout
 func (p *PythonParser) callPythonHelper(pythonCmd, scriptPath, filePath string) ([]byte, error) {
-	cmd := exec.Command(pythonCmd, scriptPath, filePath)
+	// Set timeout: 15 seconds per file (should be enough for most files)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	
+	cmd := exec.CommandContext(ctx, pythonCmd, scriptPath, filePath)
 	
 	output, err := cmd.Output()
 	if err != nil {
+		// Check if it's a timeout error
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("python script timed out after 15 seconds (file may be too large or have syntax errors)")
+		}
+		
 		// Check if it's an exit error with stderr
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return nil, fmt.Errorf("python script failed: %s", string(exitErr.Stderr))
