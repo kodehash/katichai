@@ -68,6 +68,8 @@ type APIServerConfig struct {
 type ReviewConfig struct {
 	GenerateHTML  bool   `yaml:"generate_html"`  // whether to generate HTML reports
 	HTMLOutputPath string `yaml:"html_output_path,omitempty"` // output path for HTML reports (default: .katich/reports)
+	GenerateGFM  bool   `yaml:"generate_gfm"`  // whether to generate GFM reports
+	GFMOutputPath string `yaml:"gfm_output_path,omitempty"` // output path for GFM reports (default: .katich/reports)
 }
 
 // DefaultConfig returns a configuration with sensible defaults
@@ -104,6 +106,8 @@ func DefaultConfig() *Config {
 		Review: ReviewConfig{
 			GenerateHTML:   true,  // Default to true for HTML reports
 			HTMLOutputPath: ".katich/reports",
+			GenerateGFM:    false, // Default to false for GFM reports
+			GFMOutputPath:  ".katich/reports",
 		},
 	}
 }

@@ -346,6 +346,14 @@ func (e *ReviewEngine) Review(diff *git.Diff, diffRange ...string) (*ReviewRepor
 		}
 	}
 
+	// 10. Generate GFM report if enabled
+	if e.shouldGenerateGFM() {
+		if err := e.generateGFMReport(report, diff, e.diffRange); err != nil {
+			// Log error but don't fail the review
+			fmt.Printf("Warning: Failed to generate GFM report: %v\n", err)
+		}
+	}
+
 	return report, nil
 }
 
@@ -561,7 +569,15 @@ func (e *ReviewEngine) performChunkedReview(
 			fmt.Printf("Warning: Failed to generate HTML report: %v\n", err)
 		}
 	}
-	
+
+	// 9. Generate GFM report if enabled
+	if e.shouldGenerateGFM() {
+		if err := e.generateGFMReport(report, diff, e.diffRange); err != nil {
+			// Log error but don't fail the review
+			fmt.Printf("Warning: Failed to generate GFM report: %v\n", err)
+		}
+	}
+
 	return report, nil
 }
 
@@ -1713,6 +1729,11 @@ func (e *ReviewEngine) shouldGenerateHTML() bool {
 	return e.config.Review.GenerateHTML
 }
 
+// shouldGenerateGFM checks if GFM generation should be enabled
+func (e *ReviewEngine) shouldGenerateGFM() bool {
+	return e.config.Review.GenerateGFM
+}
+
 // generateHTMLReport generates and saves HTML report
 func (e *ReviewEngine) generateHTMLReport(report *ReviewReport, diff *git.Diff, diffRange string) error {
 	// Get repo root for file reading
@@ -1803,6 +1824,99 @@ func (e *ReviewEngine) generateHTMLReport(report *ReviewReport, diff *git.Diff, 
 	}
 
 	fmt.Printf("📄 HTML report saved to: %s\n", fullPath)
+	return nil
+}
+
+// generateGFMReport generates and saves GFM report
+func (e *ReviewEngine) generateGFMReport(report *ReviewReport, diff *git.Diff, diffRange string) error {
+	// Get repo root for file reading
+	repo, err := git.FindRepository()
+	if err != nil {
+		return fmt.Errorf("failed to find repository: %w", err)
+	}
+
+	// Collect file paths
+	filePaths := make([]string, 0)
+	for filePath := range report.FileAnalysis {
+		filePaths = append(filePaths, filePath)
+	}
+
+	// Read file contents
+	fileReader := NewFileReader(repo.RootPath)
+	fileContents, err := fileReader.ReadFiles(filePaths)
+	if err != nil {
+		// Continue with partial content
+	}
+
+	// Extract diff information
+	diffInfo := &DiffInfo{}
+	
+	// Get project name
+	projectName, err := e.config.GetProjectName()
+	if err != nil {
+		// Try to extract from Git repository
+		if repo != nil {
+			if name, repoErr := repo.GetProjectName(); repoErr == nil {
+				projectName = name
+			}
+		}
+	}
+	diffInfo.ProjectName = projectName
+	
+	// Check if this is a full repository review
+	if diffRange == "full repository" {
+		diffInfo.IsFullRepository = true
+		diffInfo.Range = "full repository"
+	} else if diffRange != "" {
+		diffInfo.Range = diffRange
+		// Extract commit SHAs from range (e.g., "main..feature" -> get SHAs for both)
+		if strings.Contains(diffRange, "..") {
+			parts := strings.Split(diffRange, "..")
+			if len(parts) == 2 {
+				// Get commit SHAs for both sides
+				if fromCommit, err := repo.GetCommit(parts[0]); err == nil {
+					diffInfo.FromCommit = fromCommit.ShortHash
+				}
+				if toCommit, err := repo.GetCommit(parts[1]); err == nil {
+					diffInfo.ToCommit = toCommit.ShortHash
+				}
+			}
+		}
+	} else if diff.Commit != nil {
+		// For single commit review, show parent and current commit
+		diffInfo.ToCommit = diff.Commit.ShortHash
+		// Try to get parent commit
+		if parentCommit, err := repo.GetCommit(diff.Commit.Hash + "^"); err == nil {
+			diffInfo.FromCommit = parentCommit.ShortHash
+		}
+	}
+	
+	// Generate GFM
+	formatter := NewFormatter()
+	gfmContent := formatter.FormatGFM(report, fileContents, diffInfo)
+
+	// Determine output path
+	outputPath := e.config.Review.GFMOutputPath
+	if outputPath == "" {
+		outputPath = ".katich/reports"
+	}
+
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(outputPath, 0755); err != nil {
+		return fmt.Errorf("failed to create reports directory: %w", err)
+	}
+
+	// Generate filename with timestamp
+	timestamp := time.Now().Format("20060102-150405")
+	filename := fmt.Sprintf("review-%s.md", timestamp)
+	fullPath := filepath.Join(outputPath, filename)
+
+	// Write file
+	if err := os.WriteFile(fullPath, []byte(gfmContent), 0644); err != nil {
+		return fmt.Errorf("failed to write GFM file: %w", err)
+	}
+
+	fmt.Printf("📄 GFM report saved to: %s\n", fullPath)
 	return nil
 }
 
