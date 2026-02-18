@@ -20,11 +20,12 @@ type Config struct {
 
 // LLMConfig contains LLM provider settings
 type LLMConfig struct {
-	Provider       string `yaml:"provider"`        // openai, anthropic, local
-	APIKey         string `yaml:"api_key"`
-	Model          string `yaml:"model"`
-	BaseURL        string `yaml:"base_url,omitempty"`     // for local LLMs
-	MaxInputTokens int    `yaml:"max_input_tokens,omitempty"` // max tokens for input (default: 20000)
+	Provider        string `yaml:"provider"`                    // openai, anthropic, local
+	APIKey          string `yaml:"api_key"`
+	Model           string `yaml:"model"`
+	BaseURL         string `yaml:"base_url,omitempty"`          // for local LLMs
+	MaxInputTokens  int    `yaml:"max_input_tokens,omitempty"`  // max tokens for input (default: 20000)
+	TokensPerMinute int    `yaml:"tokens_per_minute,omitempty"` // TPM rate limit (0 = no rate limiting)
 }
 
 // EmbeddingsConfig contains embedding model settings
@@ -153,6 +154,15 @@ func (c *Config) overrideFromEnv() {
 	}
 	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" && c.LLM.Provider == "anthropic" {
 		c.LLM.APIKey = apiKey
+	}
+
+	// Embeddings always use OpenAI (text-embedding-3-small), regardless of the LLM provider.
+	// Check a dedicated env var first, then fall back to OPENAI_API_KEY directly.
+	if apiKey := os.Getenv("KATICH_EMBEDDINGS_API_KEY"); apiKey != "" {
+		c.Embeddings.APIKey = apiKey
+	} else if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" && c.Embeddings.APIKey == "" {
+		// Always pick up OPENAI_API_KEY for embeddings, even if LLM provider is not OpenAI
+		c.Embeddings.APIKey = apiKey
 	}
 	
 	// Override API server URL from environment variable

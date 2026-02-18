@@ -1,9 +1,12 @@
 package review
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/katichai/katich/internal/llm"
 )
 
 // mergeChunkResults merges multiple chunk review responses into a single unified review
@@ -23,9 +26,17 @@ func (e *ReviewEngine) mergeChunkResults(responses []string) string {
 		parsedChunks = append(parsedChunks, parsed)
 	}
 	
-	// Merge sections
+	// Collect raw summaries for AI normalization
+	rawSummaries := make([]string, 0, len(parsedChunks))
+	for _, pc := range parsedChunks {
+		if pc.Summary != "" {
+			rawSummaries = append(rawSummaries, pc.Summary)
+		}
+	}
+
+	// Merge sections — summary is AI-normalized; everything else is deduplicated deterministically
 	merged := parsedReview{
-		Summary:               mergeSummaries(parsedChunks),
+		Summary:               e.normalizeSummaryWithAI(rawSummaries),
 		CriticalIssues:        mergeCriticalIssues(parsedChunks),
 		Suggestions:           mergeSuggestions(parsedChunks),
 		UnnecessaryComplexity: mergeComplexity(parsedChunks),
@@ -271,6 +282,67 @@ func normalizeText(text string) string {
 	return normalized
 }
 
+// normalizeSummaryWithAI uses the LLM to collate N scattered chunk summaries into a
+// single coherent summary. It falls back to the naive concatenation if the LLM call
+// fails so that the rest of the review is never blocked.
+func (e *ReviewEngine) normalizeSummaryWithAI(summaries []string) string {
+	if len(summaries) == 0 {
+		return "No summary available."
+	}
+	if len(summaries) == 1 {
+		return summaries[0]
+	}
+
+	// Build the user message
+	var sb strings.Builder
+	sb.WriteString("The following are summary sections from a code review that was split into multiple chunks.\n")
+	sb.WriteString("Each section covers a different portion of the same codebase changes.\n\n")
+	sb.WriteString("Merge them into ONE cohesive summary. Rules:\n")
+	sb.WriteString("- Do NOT add new issues or findings that are not present in the input\n")
+	sb.WriteString("- Do NOT remove or omit any key finding\n")
+	sb.WriteString("- Do NOT reference chunks, areas, or numbered sections\n")
+	sb.WriteString("- Write as a single unified review summary\n")
+	sb.WriteString("- Be concise (under 250 words)\n")
+	sb.WriteString("- Output ONLY the summary text, with no markdown headers\n\n")
+	sb.WriteString("--- Chunk Summaries ---\n\n")
+	for i, s := range summaries {
+		sb.WriteString(fmt.Sprintf("Chunk %d:\n%s\n\n", i+1, strings.TrimSpace(s)))
+		if i < len(summaries)-1 {
+			sb.WriteString("---\n\n")
+		}
+	}
+
+	userMsg := sb.String()
+
+	fmt.Printf("🔀 Normalizing %d chunk summaries into a unified summary...\n", len(summaries))
+
+	resp, err := e.llmClient.GenerateCompletion(context.Background(), llm.CompletionRequest{
+		Messages: []llm.Message{
+			{Role: llm.RoleSystem, Content: llm.SystemPrompt},
+			{Role: llm.RoleUser, Content: userMsg},
+		},
+		Temperature: 0.2,
+		MaxTokens:   1024,
+	})
+	if err != nil {
+		fmt.Printf("⚠️  Failed to normalize summary with AI (falling back to concatenation): %v\n", err)
+		return mergeSummaries(make([]parsedReview, 0)) // trigger the fallback path below
+	}
+
+	normalized := strings.TrimSpace(resp.Content)
+	if normalized == "" {
+		fmt.Println("⚠️  AI returned empty summary, falling back to concatenation")
+		// Re-build parsedReview slice just for the fallback
+		fakeChunks := make([]parsedReview, len(summaries))
+		for i, s := range summaries {
+			fakeChunks[i] = parsedReview{Summary: s}
+		}
+		return mergeSummaries(fakeChunks)
+	}
+
+	return normalized
+}
+
 // formatReviewMarkdown formats a parsed review back to markdown
 func formatReviewMarkdown(review parsedReview) string {
 	var sb strings.Builder
@@ -317,5 +389,7 @@ func formatReviewMarkdown(review parsedReview) string {
 	
 	return sb.String()
 }
+
+
 
 

@@ -52,9 +52,9 @@ func (f *Formatter) FormatGFM(report *ReviewReport, fileContents map[string]stri
 	// File Sampling
 	if report.SamplingInfo != nil && report.SamplingInfo.TotalFiles > 0 {
 		sb.WriteString("## 📁 File Sampling\n\n")
-		sb.WriteString(fmt.Sprintf("*%d reviewed, %d ignored (%d total)*\n\n", 
-			report.SamplingInfo.ReviewedCount, 
-			report.SamplingInfo.IgnoredCount,
+		sb.WriteString(fmt.Sprintf("*%d reviewed, %d ignored (%d total)*\n\n",
+			len(report.SamplingInfo.ReviewedFiles),
+			len(report.SamplingInfo.IgnoredFiles),
 			report.SamplingInfo.TotalFiles))
 
 		// Create table for reviewed and ignored files

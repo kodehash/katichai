@@ -55,12 +55,17 @@ func (r *Reviewer) loadContext() {
 		return
 	}
 
+	// Resolve OpenAI key for embeddings: prefer dedicated embeddings key, fall back to LLM key
+	embeddingsAPIKey := r.config.Embeddings.APIKey
+	if embeddingsAPIKey == "" {
+		embeddingsAPIKey = r.config.LLM.APIKey
+	}
+
 	// Initialize embedding provider
-	// TODO: Make this configurable or load from stored context config
 	r.embProvider = embeddings.NewHybridProvider(
 		"http://localhost:11434",
 		"nomic-embed-text",
-		r.config.LLM.APIKey,
+		embeddingsAPIKey,
 		"text-embedding-3-small",
 	)
 
