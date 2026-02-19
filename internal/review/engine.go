@@ -346,6 +346,14 @@ func (e *ReviewEngine) Review(diff *git.Diff, diffRange ...string) (*ReviewRepor
 		}
 	}
 
+	// 10. Generate GFM report if enabled
+	if e.shouldGenerateGFM() {
+		if err := e.generateGFMReport(report, diff, e.diffRange); err != nil {
+			// Log error but don't fail the review
+			fmt.Printf("Warning: Failed to generate GFM report: %v\n", err)
+		}
+	}
+
 	return report, nil
 }
 
@@ -446,71 +454,95 @@ func (e *ReviewEngine) performChunkedReview(
 	}
 	
 	fmt.Printf("📦 Split into %d chunks for parallel review\n", len(chunks))
-	
-	// 2. Process chunks in parallel using goroutines
-	resultChan := make(chan ChunkResult, len(chunks))
-	
-	// Rate limiter: max concurrent requests (avoid API throttling)
+
+	// 2. Schedule chunks into TPM-aware minute-windows, then process each window
+	// in parallel using the existing semaphore (max 3 concurrent requests).
+	tpmLimit := e.config.LLM.TokensPerMinute
+	windows := scheduleChunkWindows(chunks, tpmLimit)
+
+	if len(windows) > 1 {
+		fmt.Printf("⏱  TPM rate limiting active: scheduling %d chunks across %d minute-windows (limit: %d tokens/min)\n",
+			len(chunks), len(windows), tpmLimit)
+	}
+
+	// Semaphore: limits max concurrent in-flight API calls (unchanged behaviour)
 	maxConcurrent := 3
 	semaphore := make(chan struct{}, maxConcurrent)
-	
-	for _, chunk := range chunks {
-		// Acquire semaphore
-		semaphore <- struct{}{}
-		
-		go func(c *ReviewChunk) {
-			defer func() { <-semaphore }()
-			
-			fmt.Printf("🤖 Reviewing chunk %d/%d...\n", c.ID, len(chunks))
-			
-			chunkPrompt := buildChunkPrompt(c)
-			
-			// Calculate available tokens for completion
-			inputTokens := llm.EstimateTokens(llm.SystemPrompt) + llm.EstimateTokens(chunkPrompt)
-			maxOutputTokens := modelLimit - inputTokens - 500 // 500 buffer
-			
-			// Cap at reasonable maximum
-			if maxOutputTokens > 4096 {
-				maxOutputTokens = 4096
-			}
-			if maxOutputTokens < 512 {
-				maxOutputTokens = 512 // Minimum to provide useful response
-			}
-			
-			resp, err := e.llmClient.GenerateCompletion(context.Background(), llm.CompletionRequest{
-				Messages: []llm.Message{
-					{Role: llm.RoleSystem, Content: llm.SystemPrompt},
-					{Role: llm.RoleUser, Content: chunkPrompt},
-				},
-				Temperature: 0.2,
-				MaxTokens:   maxOutputTokens,
-			})
-			
-			result := ChunkResult{ChunkID: c.ID}
-			if err != nil {
-				result.Error = fmt.Errorf("chunk %d review failed: %w", c.ID, err)
-			} else {
-				result.Content = resp.Content
-				result.InputTokens = resp.Usage.PromptTokens
-				result.OutputTokens = resp.Usage.CompletionTokens
-			}
-			
-			resultChan <- result
-		}(chunk)
-	}
-	
-	// Wait for all goroutines to complete
+
 	results := make([]ChunkResult, 0, len(chunks))
-	for i := 0; i < len(chunks); i++ {
-		result := <-resultChan
-		if result.Error != nil {
-			// Close semaphore and channel
-			close(resultChan)
-			return nil, result.Error
+
+	for winIdx, window := range windows {
+		windowStart := time.Now()
+		windowChan := make(chan ChunkResult, len(window.Chunks))
+
+		for _, chunk := range window.Chunks {
+			// Acquire semaphore
+			semaphore <- struct{}{}
+
+			go func(c *ReviewChunk) {
+				defer func() { <-semaphore }()
+
+				fmt.Printf("🤖 Reviewing chunk %d/%d...\n", c.ID, len(chunks))
+
+				chunkPrompt := buildChunkPrompt(c)
+
+				// Calculate available tokens for completion
+				inputTokens := llm.EstimateTokens(llm.SystemPrompt) + llm.EstimateTokens(chunkPrompt)
+				maxOutputTokens := modelLimit - inputTokens - 500 // 500 buffer
+
+				// Cap at reasonable maximum
+				if maxOutputTokens > 4096 {
+					maxOutputTokens = 4096
+				}
+				if maxOutputTokens < 512 {
+					maxOutputTokens = 512 // Minimum to provide useful response
+				}
+
+				resp, err := e.llmClient.GenerateCompletion(context.Background(), llm.CompletionRequest{
+					Messages: []llm.Message{
+						{Role: llm.RoleSystem, Content: llm.SystemPrompt},
+						{Role: llm.RoleUser, Content: chunkPrompt},
+					},
+					Temperature: 0.2,
+					MaxTokens:   maxOutputTokens,
+				})
+
+				result := ChunkResult{ChunkID: c.ID}
+				if err != nil {
+					result.Error = fmt.Errorf("chunk %d review failed: %w", c.ID, err)
+				} else {
+					result.Content = resp.Content
+					result.InputTokens = resp.Usage.PromptTokens
+					result.OutputTokens = resp.Usage.CompletionTokens
+				}
+
+				windowChan <- result
+			}(chunk)
 		}
-		results = append(results, result)
+
+		// Collect results for this window
+		for range window.Chunks {
+			result := <-windowChan
+			if result.Error != nil {
+				close(windowChan)
+				return nil, result.Error
+			}
+			results = append(results, result)
+		}
+		close(windowChan)
+
+		// If there are more windows, sleep for the remainder of the 60-second window
+		// so we don't exceed the tokens-per-minute limit when the next window fires.
+		if winIdx < len(windows)-1 {
+			elapsed := time.Since(windowStart)
+			wait := 60*time.Second - elapsed
+			if wait > 0 {
+				fmt.Printf("⏳ Window %d/%d done. Waiting %s before next batch to respect TPM limit...\n",
+					winIdx+1, len(windows), wait.Round(time.Second))
+				time.Sleep(wait)
+			}
+		}
 	}
-	close(resultChan)
 	
 	// Sort results by chunk ID to maintain order
 	// Using a simple bubble sort since the list is likely small
@@ -561,7 +593,15 @@ func (e *ReviewEngine) performChunkedReview(
 			fmt.Printf("Warning: Failed to generate HTML report: %v\n", err)
 		}
 	}
-	
+
+	// 9. Generate GFM report if enabled
+	if e.shouldGenerateGFM() {
+		if err := e.generateGFMReport(report, diff, e.diffRange); err != nil {
+			// Log error but don't fail the review
+			fmt.Printf("Warning: Failed to generate GFM report: %v\n", err)
+		}
+	}
+
 	return report, nil
 }
 
@@ -952,89 +992,115 @@ func (e *ReviewEngine) performChunkedFullRepositoryReview(
 	
 	fmt.Printf("📦 Split full repository review into %d chunks for parallel processing\n", len(chunks))
 	
-	// 2. Process chunks in parallel using goroutines with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute) // Longer timeout for full repo
+	// 2. Schedule chunks into TPM-aware minute-windows, then process each window
+	// in parallel using the existing semaphore (max 3 concurrent requests).
+	// An overall 20-minute context guards against infinite hangs.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
-	
-	resultChan := make(chan ChunkResult, len(chunks))
-	
-	// Rate limiter: max concurrent requests (avoid API throttling)
+
+	tpmLimit := e.config.LLM.TokensPerMinute
+	windows := scheduleChunkWindows(chunks, tpmLimit)
+
+	if len(windows) > 1 {
+		fmt.Printf("⏱  TPM rate limiting active: scheduling %d chunks across %d minute-windows (limit: %d tokens/min)\n",
+			len(chunks), len(windows), tpmLimit)
+	}
+
+	// Semaphore: limits max concurrent in-flight API calls (unchanged behaviour)
 	maxConcurrent := 3
 	semaphore := make(chan struct{}, maxConcurrent)
-	
-	for _, chunk := range chunks {
-		// Acquire semaphore
-		semaphore <- struct{}{}
-		
-		go func(c *ReviewChunk) {
-			defer func() { <-semaphore }()
-			
-			fmt.Printf("🤖 Reviewing chunk %d/%d...\n", c.ID, len(chunks))
-			
-			chunkPrompt := buildChunkPrompt(c)
-			
-			// Calculate available tokens for completion
-			inputTokens := llm.EstimateTokens(llm.SystemPrompt) + llm.EstimateTokens(chunkPrompt)
-			maxOutputTokens := modelLimit - inputTokens - 500 // 500 buffer
-			
-			// Cap at reasonable maximum
-			if maxOutputTokens > 4096 {
-				maxOutputTokens = 4096
-			}
-			if maxOutputTokens < 512 {
-				maxOutputTokens = 512 // Minimum to provide useful response
-			}
-			
-			// Use context with timeout for each chunk
-			chunkCtx, chunkCancel := context.WithTimeout(ctx, 5*time.Minute)
-			defer chunkCancel()
-			
-			resp, err := e.llmClient.GenerateCompletion(chunkCtx, llm.CompletionRequest{
-				Messages: []llm.Message{
-					{Role: llm.RoleSystem, Content: llm.SystemPrompt},
-					{Role: llm.RoleUser, Content: chunkPrompt},
-				},
-				Temperature: 0.2,
-				MaxTokens:   maxOutputTokens,
-			})
-			
-			result := ChunkResult{ChunkID: c.ID}
-			if err != nil {
-				if chunkCtx.Err() == context.DeadlineExceeded {
-					result.Error = fmt.Errorf("chunk %d review timed out after 5 minutes", c.ID)
-				} else {
-					result.Error = fmt.Errorf("chunk %d review failed: %w", c.ID, err)
-				}
-			} else {
-				result.Content = resp.Content
-				result.InputTokens = resp.Usage.PromptTokens
-				result.OutputTokens = resp.Usage.CompletionTokens
-			}
-			
-			resultChan <- result
-		}(chunk)
-	}
-	
-	// Wait for all goroutines to complete or timeout
+
 	results := make([]ChunkResult, 0, len(chunks))
 	completed := 0
-	for i := 0; i < len(chunks); i++ {
-		select {
-		case result := <-resultChan:
-			completed++
-			if result.Error != nil {
-				fmt.Printf("⚠️  Chunk %d failed: %v\n", result.ChunkID, result.Error)
-				// Continue processing other chunks instead of failing immediately
-				continue
+
+	for winIdx, window := range windows {
+		windowStart := time.Now()
+		windowChan := make(chan ChunkResult, len(window.Chunks))
+
+		for _, chunk := range window.Chunks {
+			// Acquire semaphore
+			semaphore <- struct{}{}
+
+			go func(c *ReviewChunk) {
+				defer func() { <-semaphore }()
+
+				fmt.Printf("🤖 Reviewing chunk %d/%d...\n", c.ID, len(chunks))
+
+				chunkPrompt := buildChunkPrompt(c)
+
+				// Calculate available tokens for completion
+				inputTokens := llm.EstimateTokens(llm.SystemPrompt) + llm.EstimateTokens(chunkPrompt)
+				maxOutputTokens := modelLimit - inputTokens - 500 // 500 buffer
+
+				// Cap at reasonable maximum
+				if maxOutputTokens > 4096 {
+					maxOutputTokens = 4096
+				}
+				if maxOutputTokens < 512 {
+					maxOutputTokens = 512 // Minimum to provide useful response
+				}
+
+				// Use per-chunk context with timeout, inheriting the 20-min overall limit
+				chunkCtx, chunkCancel := context.WithTimeout(ctx, 5*time.Minute)
+				defer chunkCancel()
+
+				resp, err := e.llmClient.GenerateCompletion(chunkCtx, llm.CompletionRequest{
+					Messages: []llm.Message{
+						{Role: llm.RoleSystem, Content: llm.SystemPrompt},
+						{Role: llm.RoleUser, Content: chunkPrompt},
+					},
+					Temperature: 0.2,
+					MaxTokens:   maxOutputTokens,
+				})
+
+				result := ChunkResult{ChunkID: c.ID}
+				if err != nil {
+					if chunkCtx.Err() == context.DeadlineExceeded {
+						result.Error = fmt.Errorf("chunk %d review timed out after 5 minutes", c.ID)
+					} else {
+						result.Error = fmt.Errorf("chunk %d review failed: %w", c.ID, err)
+					}
+				} else {
+					result.Content = resp.Content
+					result.InputTokens = resp.Usage.PromptTokens
+					result.OutputTokens = resp.Usage.CompletionTokens
+				}
+
+				windowChan <- result
+			}(chunk)
+		}
+
+		// Collect results for this window, respecting the overall timeout
+		for range window.Chunks {
+			select {
+			case result := <-windowChan:
+				completed++
+				if result.Error != nil {
+					fmt.Printf("⚠️  Chunk %d failed: %v\n", result.ChunkID, result.Error)
+					// Continue processing other chunks instead of failing immediately
+					continue
+				}
+				results = append(results, result)
+			case <-ctx.Done():
+				close(windowChan)
+				return nil, fmt.Errorf("full repository review timed out after 20 minutes. Only %d/%d chunks completed", completed, len(chunks))
 			}
-			results = append(results, result)
-		case <-ctx.Done():
-			close(resultChan)
-			return nil, fmt.Errorf("full repository review timed out after 20 minutes. Only %d/%d chunks completed", completed, len(chunks))
+		}
+		close(windowChan)
+
+		// If there are more windows, sleep for the remainder of the 60-second window
+		// so we don't exceed the tokens-per-minute limit when the next window fires.
+		if winIdx < len(windows)-1 {
+			elapsed := time.Since(windowStart)
+			wait := 60*time.Second - elapsed
+			if wait > 0 {
+				fmt.Printf("⏳ Window %d/%d done. Waiting %s before next batch to respect TPM limit...\n",
+					winIdx+1, len(windows), wait.Round(time.Second))
+				time.Sleep(wait)
+			}
 		}
 	}
-	close(resultChan)
-	
+
 	if len(results) == 0 {
 		return nil, fmt.Errorf("all chunks failed during full repository review")
 	}
@@ -1713,6 +1779,11 @@ func (e *ReviewEngine) shouldGenerateHTML() bool {
 	return e.config.Review.GenerateHTML
 }
 
+// shouldGenerateGFM checks if GFM generation should be enabled
+func (e *ReviewEngine) shouldGenerateGFM() bool {
+	return e.config.Review.GenerateGFM
+}
+
 // generateHTMLReport generates and saves HTML report
 func (e *ReviewEngine) generateHTMLReport(report *ReviewReport, diff *git.Diff, diffRange string) error {
 	// Get repo root for file reading
@@ -1803,6 +1874,99 @@ func (e *ReviewEngine) generateHTMLReport(report *ReviewReport, diff *git.Diff, 
 	}
 
 	fmt.Printf("📄 HTML report saved to: %s\n", fullPath)
+	return nil
+}
+
+// generateGFMReport generates and saves GFM report
+func (e *ReviewEngine) generateGFMReport(report *ReviewReport, diff *git.Diff, diffRange string) error {
+	// Get repo root for file reading
+	repo, err := git.FindRepository()
+	if err != nil {
+		return fmt.Errorf("failed to find repository: %w", err)
+	}
+
+	// Collect file paths
+	filePaths := make([]string, 0)
+	for filePath := range report.FileAnalysis {
+		filePaths = append(filePaths, filePath)
+	}
+
+	// Read file contents
+	fileReader := NewFileReader(repo.RootPath)
+	fileContents, err := fileReader.ReadFiles(filePaths)
+	if err != nil {
+		// Continue with partial content
+	}
+
+	// Extract diff information
+	diffInfo := &DiffInfo{}
+	
+	// Get project name
+	projectName, err := e.config.GetProjectName()
+	if err != nil {
+		// Try to extract from Git repository
+		if repo != nil {
+			if name, repoErr := repo.GetProjectName(); repoErr == nil {
+				projectName = name
+			}
+		}
+	}
+	diffInfo.ProjectName = projectName
+	
+	// Check if this is a full repository review
+	if diffRange == "full repository" {
+		diffInfo.IsFullRepository = true
+		diffInfo.Range = "full repository"
+	} else if diffRange != "" {
+		diffInfo.Range = diffRange
+		// Extract commit SHAs from range (e.g., "main..feature" -> get SHAs for both)
+		if strings.Contains(diffRange, "..") {
+			parts := strings.Split(diffRange, "..")
+			if len(parts) == 2 {
+				// Get commit SHAs for both sides
+				if fromCommit, err := repo.GetCommit(parts[0]); err == nil {
+					diffInfo.FromCommit = fromCommit.ShortHash
+				}
+				if toCommit, err := repo.GetCommit(parts[1]); err == nil {
+					diffInfo.ToCommit = toCommit.ShortHash
+				}
+			}
+		}
+	} else if diff.Commit != nil {
+		// For single commit review, show parent and current commit
+		diffInfo.ToCommit = diff.Commit.ShortHash
+		// Try to get parent commit
+		if parentCommit, err := repo.GetCommit(diff.Commit.Hash + "^"); err == nil {
+			diffInfo.FromCommit = parentCommit.ShortHash
+		}
+	}
+	
+	// Generate GFM
+	formatter := NewFormatter()
+	gfmContent := formatter.FormatGFM(report, fileContents, diffInfo)
+
+	// Determine output path
+	outputPath := e.config.Review.GFMOutputPath
+	if outputPath == "" {
+		outputPath = ".katich/reports"
+	}
+
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(outputPath, 0755); err != nil {
+		return fmt.Errorf("failed to create reports directory: %w", err)
+	}
+
+	// Generate filename with timestamp
+	timestamp := time.Now().Format("20060102-150405")
+	filename := fmt.Sprintf("review-%s.md", timestamp)
+	fullPath := filepath.Join(outputPath, filename)
+
+	// Write file
+	if err := os.WriteFile(fullPath, []byte(gfmContent), 0644); err != nil {
+		return fmt.Errorf("failed to write GFM file: %w", err)
+	}
+
+	fmt.Printf("📄 GFM report saved to: %s\n", fullPath)
 	return nil
 }
 

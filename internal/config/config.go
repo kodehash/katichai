@@ -20,11 +20,12 @@ type Config struct {
 
 // LLMConfig contains LLM provider settings
 type LLMConfig struct {
-	Provider       string `yaml:"provider"`        // openai, anthropic, local
-	APIKey         string `yaml:"api_key"`
-	Model          string `yaml:"model"`
-	BaseURL        string `yaml:"base_url,omitempty"`     // for local LLMs
-	MaxInputTokens int    `yaml:"max_input_tokens,omitempty"` // max tokens for input (default: 20000)
+	Provider        string `yaml:"provider"`                    // openai, anthropic, local
+	APIKey          string `yaml:"api_key"`
+	Model           string `yaml:"model"`
+	BaseURL         string `yaml:"base_url,omitempty"`          // for local LLMs
+	MaxInputTokens  int    `yaml:"max_input_tokens,omitempty"`  // max tokens for input (default: 20000)
+	TokensPerMinute int    `yaml:"tokens_per_minute,omitempty"` // TPM rate limit (0 = no rate limiting)
 }
 
 // EmbeddingsConfig contains embedding model settings
@@ -68,15 +69,18 @@ type APIServerConfig struct {
 type ReviewConfig struct {
 	GenerateHTML  bool   `yaml:"generate_html"`  // whether to generate HTML reports
 	HTMLOutputPath string `yaml:"html_output_path,omitempty"` // output path for HTML reports (default: .katich/reports)
+	GenerateGFM  bool   `yaml:"generate_gfm"`  // whether to generate GFM reports
+	GFMOutputPath string `yaml:"gfm_output_path,omitempty"` // output path for GFM reports (default: .katich/reports)
 }
 
 // DefaultConfig returns a configuration with sensible defaults
 func DefaultConfig() *Config {
 	return &Config{
 		LLM: LLMConfig{
-			Provider:       "openai",
-			Model:          "gpt-4",
-			MaxInputTokens: 20000,
+			Provider:        "openai",
+			Model:           "gpt-4",
+			MaxInputTokens:  20000,
+			TokensPerMinute: 90000, // Conservative default; adjust to match your API tier
 		},
 		Embeddings: EmbeddingsConfig{
 			Model:    "jina-code-v2",
@@ -104,6 +108,8 @@ func DefaultConfig() *Config {
 		Review: ReviewConfig{
 			GenerateHTML:   true,  // Default to true for HTML reports
 			HTMLOutputPath: ".katich/reports",
+			GenerateGFM:    false, // Default to false for GFM reports
+			GFMOutputPath:  ".katich/reports",
 		},
 	}
 }
@@ -149,6 +155,15 @@ func (c *Config) overrideFromEnv() {
 	}
 	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" && c.LLM.Provider == "anthropic" {
 		c.LLM.APIKey = apiKey
+	}
+
+	// Embeddings always use OpenAI (text-embedding-3-small), regardless of the LLM provider.
+	// Check a dedicated env var first, then fall back to OPENAI_API_KEY directly.
+	if apiKey := os.Getenv("KATICH_EMBEDDINGS_API_KEY"); apiKey != "" {
+		c.Embeddings.APIKey = apiKey
+	} else if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" && c.Embeddings.APIKey == "" {
+		// Always pick up OPENAI_API_KEY for embeddings, even if LLM provider is not OpenAI
+		c.Embeddings.APIKey = apiKey
 	}
 	
 	// Override API server URL from environment variable

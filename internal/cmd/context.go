@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	goctx "context"
 	"os"
 	"path/filepath"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/katichai/katich/internal/context"
 	"github.com/katichai/katich/internal/embeddings"
 	"github.com/katichai/katich/internal/git"
+	"github.com/katichai/katich/internal/llm"
 	"github.com/spf13/cobra"
 )
 
@@ -198,11 +200,29 @@ func runContextBuild() error {
 		cfg = config.DefaultConfig()
 	}
 
+	// Resolve OpenAI key for embeddings:
+	// 1. Dedicated embeddings.api_key from config / env (already set by overrideFromEnv)
+	// 2. LLM key (works when provider is openai and key is in config/env)
+	// 3. Fetch from API server if enabled and key is still empty
+	embeddingsAPIKey := cfg.Embeddings.APIKey
+	if embeddingsAPIKey == "" {
+		embeddingsAPIKey = cfg.LLM.APIKey
+	}
+	if embeddingsAPIKey == "" && cfg.APIServer.Enabled && cfg.APIServer.URL != "" {
+		projectName, _ := cfg.GetProjectName()
+		keyFetcher := llm.NewKeyFetcher(cfg.APIServer.URL, cfg.APIServer.Token)
+		if fetchedKey, err := keyFetcher.FetchLLMKey(goctx.Background(), projectName, "openai"); err == nil {
+			embeddingsAPIKey = fetchedKey
+		} else {
+			fmt.Printf("  ⚠️  Could not fetch embeddings key from API server: %v\n", err)
+		}
+	}
+
 	// Create embedding provider (hybrid)
 	provider := embeddings.NewHybridProvider(
 		"http://localhost:11434",
 		"nomic-embed-text",
-		cfg.LLM.APIKey,
+		embeddingsAPIKey,
 		"text-embedding-3-small",
 	)
 

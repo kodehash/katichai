@@ -40,6 +40,7 @@ var (
 	outputFormat string
 	outputFile   string
 	generateHTML bool
+	generateGFM  bool
 )
 
 func init() {
@@ -54,6 +55,7 @@ func init() {
 	reviewCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "terminal", "output format (terminal, json, markdown, html)")
 	reviewCmd.PersistentFlags().StringVar(&outputFile, "output-file", "", "write output to file")
 	reviewCmd.PersistentFlags().BoolVar(&generateHTML, "html", false, "generate HTML report (overrides config setting)")
+	reviewCmd.PersistentFlags().BoolVar(&generateGFM, "gfm", false, "generate GitHub Flavored Markdown report (overrides config setting)")
 }
 
 // reviewLatestCmd reviews the latest commit
@@ -195,6 +197,11 @@ func runReviewLatest() error {
 		cfg.Review.GenerateHTML = true
 	}
 
+	// Override GFM generation if flag is set
+	if generateGFM {
+		cfg.Review.GenerateGFM = true
+	}
+
 	// Initialize legacy reviewer (used by Engine)
 	baseReviewer := review.NewReviewer(repo.RootPath, cfg)
 	
@@ -286,6 +293,11 @@ func runReviewDiff(diffRange string) error {
 		cfg.Review.GenerateHTML = true
 	}
 
+	// Override GFM generation if flag is set
+	if generateGFM {
+		cfg.Review.GenerateGFM = true
+	}
+
 	// Initialize legacy reviewer (used by Engine)
 	baseReviewer := review.NewReviewer(repo.RootPath, cfg)
 	
@@ -371,6 +383,11 @@ func runReviewFull() error {
 	// Override HTML generation if flag is set
 	if generateHTML {
 		cfg.Review.GenerateHTML = true
+	}
+
+	// Override GFM generation if flag is set
+	if generateGFM {
+		cfg.Review.GenerateGFM = true
 	}
 
 	// Initialize legacy reviewer (used by Engine)

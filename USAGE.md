@@ -31,6 +31,7 @@
 - [Output Formats](#output-formats)
 - [Example Outputs](#example-outputs)
 - [Best Practices](#best-practices)
+- [Rate Limiting (TPM)](#rate-limiting-tpm)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -137,6 +138,7 @@ llm:
   model: gpt-4
   api_key: ""  # Add your OpenAI API key here
   max_input_tokens: 20000
+  tokens_per_minute: 90000  # TPM rate limit — adjust to your API tier (0 = disabled)
 
 embeddings:
   provider: local
@@ -145,6 +147,8 @@ embeddings:
 review:
   generate_html: true
   html_output_path: .katich/reports
+  generate_gfm: false         # Set to true to also generate a GFM .md report
+  gfm_output_path: .katich/reports
 
 analysis:
   max_function_length: 50
@@ -290,11 +294,18 @@ Review the latest commit by comparing it with the previous commit.
 katich review latest
 ```
 
+**Flags:**
+```bash
+katich review latest --html   # Force HTML report generation
+katich review latest --gfm    # Generate a GitHub Flavored Markdown report
+```
+
 **What it does:**
 - Compares the latest commit with its parent
 - Analyzes all changes in the commit
 - Generates comprehensive review report
-- Creates HTML report (if enabled)
+- Creates HTML report (if `review.generate_html: true` or `--html` flag)
+- Creates GFM report (if `review.generate_gfm: true` or `--gfm` flag)
 
 **Example Output:**
 ```
@@ -391,6 +402,12 @@ katich review diff abc1234..def5678
 
 # Compare current branch with main
 katich review diff main..HEAD
+```
+
+**Flags:**
+```bash
+katich review diff main..feature --html  # Force HTML report
+katich review diff main..feature --gfm   # Generate GFM report (ideal for PR comments)
 ```
 
 **What it does:**
@@ -596,6 +613,51 @@ Comprehensive interactive HTML report with:
 - File navigation
 - Responsive design
 
+### GitHub Flavored Markdown (GFM) Report
+
+A clean, table-based Markdown report designed to be posted directly as a GitHub PR comment or pasted into a GitHub Actions job summary. Maximum 65,000 characters.
+
+**Enable via config:**
+```yaml
+review:
+  generate_gfm: true
+  gfm_output_path: .katich/reports
+```
+
+**Enable via flag (one-off):**
+```bash
+katich review latest --gfm
+katich review diff main..feature --gfm
+```
+
+**Location:** `.katich/reports/review-YYYYMMDD-HHMMSS.md`
+
+**What's included:**
+- Overall score badge and risk level
+- File coverage summary
+- Critical issues table with GitHub file links
+- Suggestions and unnecessary complexity tables
+- Duplicate code links (URLs only, no code snippets)
+- DB/ORM query review findings
+
+**What's excluded (to keep it GitHub-friendly):**
+- No code snippets (only links in `owner/repo/blob/sha/file#Lnn` format)
+- No dashboard summary section
+- No token usage display
+- Content is truncated gracefully if it would exceed 65,000 characters
+
+**Ideal for GitHub Actions:**
+```yaml
+- name: Run Katich Review
+  run: |
+    katich review diff ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} --gfm
+    GFM_FILE=$(ls -t .katich/reports/*.md | head -1)
+    echo "## Katich AI Code Review" >> $GITHUB_STEP_SUMMARY
+    cat "$GFM_FILE" >> $GITHUB_STEP_SUMMARY
+  env:
+    OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
 ### JSON Output
 
 Machine-readable JSON format for integration with other tools.
@@ -708,6 +770,16 @@ review:
   html_output_path: .katich/reports
 ```
 
+### 6. GFM Reports for CI/CD
+
+Enable GFM reports when running in GitHub Actions to post results directly as PR comments or job summaries:
+```yaml
+review:
+  generate_gfm: true
+  gfm_output_path: .katich/reports
+```
+Or use the `--gfm` flag for a one-off run without changing config.
+
 ### 6. Sampling Configuration
 
 Adjust sampling for your repository size:
@@ -761,6 +833,25 @@ The tool automatically focuses on security vulnerabilities. Ensure your API key 
 - Check write permissions for `.katich/reports/` directory
 - Verify disk space available
 
+### Issue: GFM report not generated
+
+**Solution:**
+- Ensure `review.generate_gfm: true` in config, or pass the `--gfm` flag
+- Check write permissions for `.katich/reports/` directory
+
+### Issue: "429 rate limit" / "tokens per minute exceeded"
+
+**Solution:**
+- Set `llm.tokens_per_minute` in config to match your API tier's TPM limit
+- Katich will automatically pace chunk batches to stay within the limit
+- If already set, lower the value slightly to add a buffer
+- Set to `0` to disable scheduling (useful for high-tier API accounts)
+
+```yaml
+llm:
+  tokens_per_minute: 90000  # Lower if still hitting rate limits
+```
+
 ### Issue: "No issues found" but you expect issues
 
 **Possible causes:**
@@ -789,8 +880,7 @@ Or allow in System Settings > Privacy & Security.
 
 ### CI/CD Integration
 
-Add to your CI pipeline:
-
+**Basic usage:**
 ```yaml
 # GitHub Actions example
 - name: Run Katich Review
@@ -798,6 +888,28 @@ Add to your CI pipeline:
     katich review diff ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
   env:
     OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+**With GFM report posted to job summary:**
+```yaml
+- name: Run Katich Review
+  run: |
+    katich review diff ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} --gfm
+    GFM_FILE=$(ls -t .katich/reports/*.md | head -1)
+    echo "## Katich AI Code Review" >> $GITHUB_STEP_SUMMARY
+    cat "$GFM_FILE" >> $GITHUB_STEP_SUMMARY
+  env:
+    OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+**With TPM rate limiting for shared API keys:**
+```yaml
+- name: Run Katich Review
+  run: |
+    katich review diff ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} --gfm
+  env:
+    OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    # tokens_per_minute is set in .katich/config.yaml; lower it if CI hits rate limits
 ```
 
 ### Custom Configuration
@@ -810,6 +922,12 @@ katich review latest --config .katich/production.yaml
 
 # Force HTML generation
 katich review latest --html
+
+# Generate GFM report (GitHub Flavored Markdown)
+katich review latest --gfm
+
+# Combine flags
+katich review diff main..feature --html --gfm
 ```
 
 ### API Server Integration
@@ -824,6 +942,50 @@ api_server:
 ```
 
 The API server should return API keys based on `project_name` and `provider` from your config.
+
+---
+
+---
+
+## Rate Limiting (TPM)
+
+### What is TPM?
+
+Tokens Per Minute (TPM) is the rate limit enforced by LLM API providers. When a chunked review sends too many tokens in a short window, the API returns a `429 rate limit` error.
+
+### How Katich Handles It
+
+Katich proactively schedules chunks into 60-second windows before sending any requests:
+
+1. **Token estimation** — Each chunk's token cost (input + estimated output) is calculated upfront.
+2. **Window assignment** — Chunks are greedily packed into windows so each window's total stays under `tokens_per_minute`.
+3. **Pacing** — After each window finishes, Katich waits out the remainder of the 60-second slot before starting the next window.
+4. **Existing concurrency preserved** — Within a window, chunks still run in parallel (up to 3 concurrent requests).
+
+### Configuration
+
+```yaml
+llm:
+  tokens_per_minute: 90000  # Set to 0 to disable TPM limiting
+```
+
+You can find your TPM limit in your API provider's dashboard:
+- **OpenAI**: https://platform.openai.com/settings/organization/limits
+- **Anthropic**: https://console.anthropic.com/settings/limits
+
+### What You'll See
+
+```
+📦 Split into 6 chunks across 2 TPM windows
+🤖 Reviewing chunk 1/6...
+🤖 Reviewing chunk 2/6...
+🤖 Reviewing chunk 3/6...
+⏳ Window 1/2 done. Waiting 47s before next batch to respect TPM limit...
+🤖 Reviewing chunk 4/6...
+🤖 Reviewing chunk 5/6...
+🤖 Reviewing chunk 6/6...
+🔀 Normalizing 2 chunk summaries into a unified summary...
+```
 
 ---
 
