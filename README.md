@@ -17,6 +17,8 @@ Katichai prevents unnecessary AI-generated code, detects duplicated logic, enfor
 *   🌐 **Multi-Language**: Native support for **Go, Java, Python, TypeScript, JavaScript**.
 *   🔐 **Local & Secure**: Analyzes changes locally. Interaction with LLMs is configurable (OpenAI, Anthropic, or Local Ollama).
 *   ⚡ **Intelligent Chunking with Parallel Processing**: Automatically splits large reviews into chunks when they exceed token limits, processes them in parallel (3x faster), and merges results seamlessly.
+*   ⏱️ **Tokens-Per-Minute (TPM) Rate Limiting**: Proactively schedules chunk batches across 60-second windows to stay within your API tier's TPM limit — no more rate-limit errors mid-review.
+*   📝 **GitHub Flavored Markdown (GFM) Reports**: Generate a clean, table-based `.md` report ideal for posting directly as a GitHub PR comment or Actions summary (`--gfm` flag).
 
 ## 🛠️ CLI Setup
 
@@ -91,6 +93,7 @@ llm:
   provider: openai
   model: gpt-4o
   api_key: sk-...  # Or set via ENV: KATICH_LLM_API_KEY or OPENAI_API_KEY
+  tokens_per_minute: 90000  # Match to your API tier (0 = disabled)
 
 embeddings:
   provider: openai
@@ -203,7 +206,8 @@ Katichai automatically handles large code reviews that exceed LLM token limits:
    - Related files in the same module/package
    - File size and complexity
 3. **Parallel Processing**: Chunks are reviewed concurrently using goroutines with a semaphore (max 3 concurrent requests to avoid API throttling).
-4. **Smart Merging**: Results are deduplicated and merged into a unified report, combining summaries, issues, and suggestions.
+4. **TPM-Aware Scheduling**: Before sending chunks, Katichai estimates their token cost and groups them into 60-second windows so the total never exceeds your `tokens_per_minute` limit. Windows are processed sequentially with automatic inter-window pausing.
+5. **Smart Merging**: Results are deduplicated and merged into a unified report. A final AI call normalizes all chunk summaries into one coherent overview instead of scattered per-chunk paragraphs.
 
 ### Performance Benefits
 - **Single-shot review**: ~30s for large PRs (if within token limits)
@@ -211,27 +215,40 @@ Katichai automatically handles large code reviews that exceed LLM token limits:
 - **No token limit errors**: Reviews of any size complete successfully
 
 ### Configuration
-You can adjust the token budget in `.katich/config.yaml`:
+You can adjust the token budget and TPM limit in `.katich/config.yaml`:
 
 ```yaml
 llm:
-  max_input_tokens: 20000  # Adjust based on your model's capacity
+  max_input_tokens: 20000   # Adjust based on your model's context window
+  tokens_per_minute: 90000  # Set to your API tier's TPM limit (0 = disabled)
 ```
 
+Common TPM values by tier:
+| Provider | Tier | Typical TPM |
+|---|---|---|
+| OpenAI GPT-4 | Tier 1 | 30,000 |
+| OpenAI GPT-4 | Tier 2 | 90,000 |
+| OpenAI GPT-4-Turbo | Tier 3+ | 300,000+ |
+| Anthropic Claude 3.5 | Standard | 40,000 |
+
 ### What You'll See
-When chunking is triggered, you'll see progress updates:
+When chunking and TPM scheduling are active, you'll see progress updates:
 
 ```
 ⚠️  Prompt size (25000 tokens) exceeds model limit (8192 tokens). Using chunked review...
-📦 Split into 4 chunks for parallel review
-🤖 Reviewing chunk 1/4...
-🤖 Reviewing chunk 2/4...
-🤖 Reviewing chunk 3/4...
-🤖 Reviewing chunk 4/4...
+📦 Split into 6 chunks across 2 TPM windows
+🤖 Reviewing chunk 1/6...
+🤖 Reviewing chunk 2/6...
+🤖 Reviewing chunk 3/6...
+⏳ Window 1/2 done. Waiting 47s before next batch to respect TPM limit...
+🤖 Reviewing chunk 4/6...
+🤖 Reviewing chunk 5/6...
+🤖 Reviewing chunk 6/6...
 🔄 Merging chunk results...
+🔀 Normalizing 2 chunk summaries into a unified summary...
 ```
 
-The final report is identical in format to a single-shot review—you get comprehensive coverage without worrying about token limits.
+The final report is identical in format to a single-shot review — you get comprehensive coverage without token limit or rate limit errors.
 
 ## 📝 Example Output
 

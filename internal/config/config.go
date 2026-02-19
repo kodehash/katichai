@@ -77,9 +77,10 @@ type ReviewConfig struct {
 func DefaultConfig() *Config {
 	return &Config{
 		LLM: LLMConfig{
-			Provider:       "openai",
-			Model:          "gpt-4",
-			MaxInputTokens: 20000,
+			Provider:        "openai",
+			Model:           "gpt-4",
+			MaxInputTokens:  20000,
+			TokensPerMinute: 90000, // Conservative default; adjust to match your API tier
 		},
 		Embeddings: EmbeddingsConfig{
 			Model:    "jina-code-v2",

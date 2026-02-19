@@ -59,6 +59,7 @@ func runInit() {
   model: gpt-4
   api_key: ""  # Add your OpenAI API key here
   max_input_tokens: 20000
+  tokens_per_minute: 90000  # TPM rate limit — adjust to match your API tier (0 = disabled)
 
 embeddings:
   provider: local
