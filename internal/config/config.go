@@ -16,6 +16,19 @@ type Config struct {
 	Analysis    AnalysisConfig  `yaml:"analysis"`
 	APIServer   APIServerConfig `yaml:"api_server,omitempty"`
 	Review      ReviewConfig    `yaml:"review,omitempty"`
+	Context     ContextConfig   `yaml:"context,omitempty"`
+}
+
+// ContextConfig controls where context and embeddings are loaded from
+type ContextConfig struct {
+	Source string             `yaml:"source"` // "local" (default) or "remote"
+	Remote RemoteContextConfig `yaml:"remote,omitempty"`
+}
+
+// RemoteContextConfig is used when source is "remote" (origin branch/directory)
+type RemoteContextConfig struct {
+	Branch    string `yaml:"branch"`    // default: "main"
+	Directory string `yaml:"directory"` // default: "katich-ai-context"
 }
 
 // LLMConfig contains LLM provider settings
@@ -110,6 +123,13 @@ func DefaultConfig() *Config {
 			HTMLOutputPath: ".katich/reports",
 			GenerateGFM:    false, // Default to false for GFM reports
 			GFMOutputPath:  ".katich/reports",
+		},
+		Context: ContextConfig{
+			Source: "local",
+			Remote: RemoteContextConfig{
+				Branch:    "main",
+				Directory: "katich-ai-context",
+			},
 		},
 	}
 }

@@ -126,55 +126,60 @@ Build date: 2024-01-15
 
 ## Configuration
 
-Katich uses a configuration file at `.katich/config.yaml`. Run `katich init` to create it with defaults.
+Katich uses a configuration file at `.katich/config.yaml`. Run `katich init` to create it with defaults. For **all possible options** with descriptions, copy or reference **`.katich/config.example.yaml`** from the repository.
 
-### Default Configuration
+### Key options
+
+| Section | Key | Purpose |
+|--------|-----|---------|
+| **llm** | provider, model, api_key | Which LLM to use (openai, anthropic, ollama) |
+| **llm** | max_input_tokens | Override model context window (0 = auto-detect) |
+| **llm** | tokens_per_minute | TPM rate limit for chunked reviews (0 = disabled) |
+| **embeddings** | provider, model, api_key | Local (Ollama) or API (OpenAI) for embeddings |
+| **context** | source | `local` (use .katich/) or `remote` (fetch from Git) |
+| **context.remote** | branch, directory | Branch and directory for remote context |
+| **review** | generate_html, generate_gfm | Output HTML and/or GFM reports |
+| **analysis** | sampling.* | Max files, context lines, skip tests, etc. |
+
+### Minimal examples
 
 ```yaml
-project_name: your-project-name
-
+# OpenAI
 llm:
   provider: openai
-  model: gpt-4
-  api_key: ""  # Add your OpenAI API key here
-  max_input_tokens: 20000
-  tokens_per_minute: 90000  # TPM rate limit — adjust to your API tier (0 = disabled)
+  model: gpt-4o
+  api_key: "sk-..."
+  tokens_per_minute: 90000
 
-embeddings:
-  provider: local
-  model: jina-code-v2
+# Ollama (local)
+llm:
+  provider: ollama
+  model: llama3
+  base_url: http://localhost:11434
 
-review:
-  generate_html: true
-  html_output_path: .katich/reports
-  generate_gfm: false         # Set to true to also generate a GFM .md report
-  gfm_output_path: .katich/reports
-
-analysis:
-  max_function_length: 50
-  complexity_threshold: 10
-  similarity_threshold: 0.70
-  min_function_lines: 5
-  duplicate_threshold: 0.85
-  ignore_trivial_patterns: true
-  sampling:
-    enabled: true
-    max_files: 50
-    context_lines: 2
-    skip_generated: true
-    skip_tests: false
-    adaptive_budget: true
+# Context: use remote repo for context/embeddings
+context:
+  source: remote
+  remote:
+    branch: main
+    directory: katich-ai-context
 ```
 
 ### Environment Variables
 
 You can override configuration using environment variables:
 
-- `KATICH_LLM_API_KEY` - LLM API key
-- `OPENAI_API_KEY` - OpenAI API key (if provider is openai)
-- `ANTHROPIC_API_KEY` - Anthropic API key (if provider is anthropic)
-- `KATICH_API_SERVER_URL` - API server URL for key fetching
-- `KATICH_API_TOKEN` - API server authentication token
+- `KATICH_LLM_API_KEY` — LLM API key
+- `OPENAI_API_KEY` — OpenAI API key (if provider is openai)
+- `ANTHROPIC_API_KEY` — Anthropic API key (if provider is anthropic)
+- `KATICH_EMBEDDINGS_API_KEY` — Embeddings API key (else falls back to OPENAI_API_KEY)
+- `KATICH_API_SERVER_URL` — API server URL for key fetching
+- `KATICH_API_TOKEN` — API server authentication token
+
+### Context source (local vs remote)
+
+- **`context.source: local`** (default) — Use `context.json` and `embeddings.json` from the local `.katich/` directory. Run `katich context build` to create/update them.
+- **`context.source: remote`** — Fetch both files from your Git remote (e.g. origin). Review commands will `git fetch` and read from `context.remote.branch` and `context.remote.directory` (default `main` and `katich-ai-context`). No GitHub token is required if you can push/pull with normal Git. Use `katich context build --publish` to push updated context from another clone.
 
 ### LLM Providers
 
@@ -240,14 +245,24 @@ Analyze your codebase and build context for better reviews. This is optional but
 
 **Usage:**
 ```bash
-katich context build
+katich context build                    # Incremental (default): only changed files
+katich context build --force           # Full rebuild (ignore cache)
+katich context build --publish         # Push context.json + embeddings.json to origin
+katich context build -i                # Same as default (incremental)
+katich context build -f                # Same as --force
 ```
 
+**Flags:**
+- `--incremental`, `-i` (default: true) — Only analyze/add embeddings for files that changed since the last build on the same branch. If HEAD hasn’t changed, prints "No changes found to perform context build" and exits.
+- `--force`, `-f` — Ignore cached state and rebuild everything (context.json and embeddings).
+- `--publish` — After building, commit and push `context.json` and `embeddings.json` into the configured remote branch (e.g. `main`) under the directory from `context.remote.directory` (default `katich-ai-context`). Uses normal Git (no GitHub token required if you can push).
+
 **What it does:**
-- Analyzes all source files in the repository
+- Analyzes source files (all, or only changed when incremental)
 - Generates code metrics and complexity analysis
-- Creates embeddings for semantic code understanding
+- Creates embeddings for semantic code understanding (batches of 100 for API, with retries)
 - Saves context to `.katich/context.json` and `.katich/embeddings.json`
+- Build state (branch + commit) is stored in `.katich/.last_build_state` for incremental builds
 
 **Example Output:**
 ```
@@ -852,6 +867,22 @@ llm:
   tokens_per_minute: 90000  # Lower if still hitting rate limits
 ```
 
+### Issue: "context deadline exceeded" / "Client.Timeout exceeded" when generating embeddings
+
+**Cause:** The OpenAI embeddings API call timed out (e.g. many files in one go or slow network).
+
+**Solution:**
+- Katich now sends embeddings in **batches of 100** with a **2-minute timeout** per batch and **up to 3 retries** with backoff. Updating to the latest release should resolve most timeouts.
+- If it still happens: check network and OpenAI status; use a smaller repo or run `katich context build --incremental` so only changed files need new embeddings.
+- If embeddings fail, the tool continues without them (reviews still run, but without semantic similarity).
+
+### Issue: "This model's maximum context length is X tokens... you requested Y"
+
+**Cause:** The model’s total context window was exceeded (input + output).
+
+**Solution:**
+- Katich uses **optimistic chunking**: every review is chunked and each chunk gets a dynamic `max_tokens`, so this error should not occur with current versions. If you still see it, set an explicit limit in config so chunking uses the correct window: `llm.max_input_tokens: <your_model_limit>` (e.g. 8192 for older GPT-4). Ensure you’re on the latest release.
+
 ### Issue: "No issues found" but you expect issues
 
 **Possible causes:**
@@ -947,43 +978,44 @@ The API server should return API keys based on `project_name` and `provider` fro
 
 ---
 
-## Rate Limiting (TPM)
+## Token limits and chunking
 
-### What is TPM?
+### Optimistic chunking
 
-Tokens Per Minute (TPM) is the rate limit enforced by LLM API providers. When a chunked review sends too many tokens in a short window, the API returns a `429 rate limit` error.
+Every review runs through the **chunked** pipeline. There is no single large request that can exceed the model’s context window: each chunk gets a dynamic `max_tokens` so input + output stay within the limit. This avoids "context length exceeded" errors regardless of diff size.
 
-### How Katich Handles It
+### Model context window
 
-Katich proactively schedules chunks into 60-second windows before sending any requests:
+Context window size is **auto-detected** from the model name (e.g. GPT-4 8K, GPT-4o 128K, Claude 200K, Llama 3.1 128K). To override (e.g. for an unknown or custom model), set in config:
 
-1. **Token estimation** — Each chunk's token cost (input + estimated output) is calculated upfront.
-2. **Window assignment** — Chunks are greedily packed into windows so each window's total stays under `tokens_per_minute`.
-3. **Pacing** — After each window finishes, Katich waits out the remainder of the 60-second slot before starting the next window.
-4. **Existing concurrency preserved** — Within a window, chunks still run in parallel (up to 3 concurrent requests).
+```yaml
+llm:
+  max_input_tokens: 8192  # 0 = auto-detect (default)
+```
 
-### Configuration
+### Rate limiting (TPM)
+
+Tokens Per Minute (TPM) is the rate limit enforced by LLM API providers. Katich schedules chunks into 60-second windows so the total tokens per minute stay under your limit:
+
+1. **Token estimation** — Each chunk’s token cost (input + estimated output) is calculated.
+2. **Window assignment** — Chunks are packed into windows under `tokens_per_minute`.
+3. **Pacing** — After each window, Katich waits out the remainder of the 60-second slot before the next batch.
+4. **Concurrency** — Within a window, up to 3 requests run in parallel.
 
 ```yaml
 llm:
   tokens_per_minute: 90000  # Set to 0 to disable TPM limiting
 ```
 
-You can find your TPM limit in your API provider's dashboard:
-- **OpenAI**: https://platform.openai.com/settings/organization/limits
-- **Anthropic**: https://console.anthropic.com/settings/limits
+Provider limits: **OpenAI** https://platform.openai.com/settings/organization/limits — **Anthropic** https://console.anthropic.com/settings/limits
 
-### What You'll See
+### What you’ll see
 
 ```
-📦 Split into 6 chunks across 2 TPM windows
+📦 Split into 6 chunks for parallel review
 🤖 Reviewing chunk 1/6...
 🤖 Reviewing chunk 2/6...
-🤖 Reviewing chunk 3/6...
 ⏳ Window 1/2 done. Waiting 47s before next batch to respect TPM limit...
-🤖 Reviewing chunk 4/6...
-🤖 Reviewing chunk 5/6...
-🤖 Reviewing chunk 6/6...
 🔀 Normalizing 2 chunk summaries into a unified summary...
 ```
 

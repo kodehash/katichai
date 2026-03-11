@@ -2,6 +2,8 @@ package review
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -48,6 +50,14 @@ func NewReviewer(rootPath string, cfg *config.Config) *Reviewer {
 
 // loadContext loads the embedding index and initializes providers
 func (r *Reviewer) loadContext() {
+	if r.config.Context.Source == "remote" {
+		if err := r.fetchRemoteContext(); err != nil {
+			fmt.Printf("  ⚠️  Failed to fetch remote context: %v\n", err)
+		} else {
+			fmt.Printf("  📡 Loaded context from remote (origin/%s)\n", r.remoteBranch())
+		}
+	}
+
 	indexPath := filepath.Join(r.rootPath, ".katich", "embeddings.json")
 	index, err := embeddings.LoadIndex(indexPath)
 	if err != nil {
@@ -72,6 +82,60 @@ func (r *Reviewer) loadContext() {
 	// Initialize duplicate detector
 	r.dupDetector = embeddings.NewDuplicateDetector(index, r.embProvider, 0.85)
 	r.hasContext = true
+}
+
+func (r *Reviewer) remoteBranch() string {
+	branch := r.config.Context.Remote.Branch
+	if branch == "" {
+		return "main"
+	}
+	return branch
+}
+
+func (r *Reviewer) remoteDir() string {
+	dir := r.config.Context.Remote.Directory
+	if dir == "" {
+		return "katich-ai-context"
+	}
+	return dir
+}
+
+// fetchRemoteContext fetches context.json and embeddings.json from origin/{branch}/{directory}
+// and writes them to .katich/ for use by the reviewer.
+func (r *Reviewer) fetchRemoteContext() error {
+	branch := r.remoteBranch()
+	dir := r.remoteDir()
+	ref := "origin/" + branch
+
+	// Ensure .katich exists
+	katichDir := filepath.Join(r.rootPath, ".katich")
+	if err := os.MkdirAll(katichDir, 0755); err != nil {
+		return fmt.Errorf("create .katich: %w", err)
+	}
+
+	// git fetch origin {branch}
+	fetchCmd := exec.Command("git", "fetch", "origin", branch)
+	fetchCmd.Dir = r.rootPath
+	fetchCmd.Stdout = os.Stdout
+	fetchCmd.Stderr = os.Stderr
+	if err := fetchCmd.Run(); err != nil {
+		return fmt.Errorf("git fetch: %w", err)
+	}
+
+	for _, name := range []string{"embeddings.json", "context.json"} {
+		remotePath := dir + "/" + name
+		showCmd := exec.Command("git", "show", ref+":"+remotePath)
+		showCmd.Dir = r.rootPath
+		out, err := showCmd.Output()
+		if err != nil {
+			return fmt.Errorf("git show %s: %w", remotePath, err)
+		}
+		dst := filepath.Join(katichDir, name)
+		if err := os.WriteFile(dst, out, 0644); err != nil {
+			return fmt.Errorf("write %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // ReviewDiff reviews changes in a diff

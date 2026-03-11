@@ -76,17 +76,20 @@ func formatTokenCount(count int) string {
 	return fmt.Sprintf("%d", count)
 }
 
-// ValidatePromptSize checks if prompt fits within model limits
-// Returns: (valid bool, totalTokens int, error)
+// ValidatePromptSize checks if prompt fits within model limits AND leaves
+// enough room for a useful completion (MinOutputTokens).
+// Returns: (valid bool, inputTokens int, error)
 func ValidatePromptSize(systemPrompt, userPrompt string, modelLimit int, buffer int) (bool, int, error) {
 	systemTokens := EstimateTokens(systemPrompt)
 	userTokens := EstimateTokens(userPrompt)
-	total := systemTokens + userTokens + buffer
-	
-	if total > modelLimit {
-		return false, total, fmt.Errorf("prompt size %d exceeds model limit %d", total, modelLimit)
+	inputTokens := systemTokens + userTokens
+
+	// Must fit input + buffer + minimum output within model limit
+	required := inputTokens + buffer + MinOutputTokens
+	if required > modelLimit {
+		return false, inputTokens, fmt.Errorf("prompt (%d tokens) + min output (%d) exceeds model limit %d", inputTokens, MinOutputTokens, modelLimit)
 	}
-	
-	return true, total, nil
+
+	return true, inputTokens, nil
 }
 

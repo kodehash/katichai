@@ -261,6 +261,44 @@ func (a *Analyzer) getTopByLength(functions []FunctionInfo, n int) []FunctionInf
 	return functions
 }
 
+// BuildResultFromFiles constructs a complete AnalysisResult from a Files map,
+// recomputing all aggregates (TotalMetrics, IssuesSummary, TopComplexity, LongestFuncs).
+// Used by incremental context build to produce a result identical in structure to AnalyzeRepository.
+func (a *Analyzer) BuildResultFromFiles(files map[string]*FileAnalysis) *AnalysisResult {
+	result := &AnalysisResult{
+		Files:         files,
+		TopComplexity: make([]FunctionInfo, 0),
+		LongestFuncs:  make([]FunctionInfo, 0),
+		IssuesSummary: IssuesSummary{
+			ByType:     make(map[IssueType]int),
+			BySeverity: make(map[Severity]int),
+		},
+	}
+
+	totalFuncLen := 0
+	for _, fa := range files {
+		a.aggregateMetrics(&result.TotalMetrics, fa.Metrics)
+		for _, issue := range fa.Issues {
+			result.IssuesSummary.TotalIssues++
+			result.IssuesSummary.ByType[issue.Type]++
+			result.IssuesSummary.BySeverity[issue.Severity]++
+		}
+		for _, fn := range fa.Functions {
+			result.TopComplexity = append(result.TopComplexity, fn)
+			result.LongestFuncs = append(result.LongestFuncs, fn)
+			totalFuncLen += fn.LOC
+		}
+	}
+
+	if result.TotalMetrics.FunctionCount > 0 {
+		result.TotalMetrics.AvgFunctionLength = float64(totalFuncLen) / float64(result.TotalMetrics.FunctionCount)
+	}
+
+	result.TopComplexity = a.getTopByComplexity(result.TopComplexity, 10)
+	result.LongestFuncs = a.getTopByLength(result.LongestFuncs, 10)
+	return result
+}
+
 // AnalyzeChangedFiles analyzes only the files that changed in a diff
 // Processes files in parallel for better performance, especially for Python files
 func (a *Analyzer) AnalyzeChangedFiles(changedFiles []string) (map[string]*FileAnalysis, error) {

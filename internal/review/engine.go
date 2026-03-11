@@ -264,97 +264,9 @@ func (e *ReviewEngine) Review(diff *git.Diff, diffRange ...string) (*ReviewRepor
 	}
 	fmt.Println()
 	
-	// 4. Build Review Context for LLM with sampled diff
-	diffString := sampledDiff.Format()
-	
-	// Truncate static issues and duplicate warnings to prevent token overflow
-	const MAX_STATIC_ISSUES = 15
-	const MAX_DUPLICATE_WARNINGS = 10
-	
-	truncatedStaticIssues := staticIssues
-	if len(truncatedStaticIssues) > MAX_STATIC_ISSUES {
-		truncatedStaticIssues = staticIssues[:MAX_STATIC_ISSUES]
-	}
-	
-	truncatedDuplicateWarnings := duplicateWarnings
-	if len(truncatedDuplicateWarnings) > MAX_DUPLICATE_WARNINGS {
-		truncatedDuplicateWarnings = duplicateWarnings[:MAX_DUPLICATE_WARNINGS]
-	}
-	
-	reviewCtx := llm.ReviewContext{
-		Diff:           diffString,
-		Frameworks:     []string{}, // TODO: Load from context.json if available
-		Languages:      detectLanguages(diff),
-		StaticIssues:   truncatedStaticIssues,
-		SimilarCode:    truncatedDuplicateWarnings,
-		FileContext:    fmt.Sprintf("%s (Sampled: %d/%d files)", summarizeFiles(diff), samplingReport.SampledFiles, samplingReport.TotalFiles),
-		Classification: fmt.Sprintf("%s (Confidence: %.2f)", classification.Type, classification.Confidence),
-	}
-
-	// 5. Generate Prompt
-	prompt := e.pmtBuilder.BuildReviewPrompt(reviewCtx, false) // false = diff-based review
-	
-	// 5.5. Validate prompt size and determine if chunking is needed
-	modelLimit := llm.GetModelTokenLimit(e.llmClient.GetModel())
-	valid, totalTokens, validationErr := llm.ValidatePromptSize(llm.SystemPrompt, prompt, modelLimit, 1000)
-	
-	if !valid {
-		fmt.Printf("⚠️  Prompt size (%d tokens) exceeds model limit (%d tokens). Using chunked review...\n", totalTokens, modelLimit)
-		return e.performChunkedReview(diff, localResult, staticIssues, duplicateWarnings, &classification, sampledDiff, samplingReport, exactDupDetector, dbQueryReviews)
-	}
-	
-	_ = validationErr // Suppress unused variable warning
-	
-	// 6. Query LLM
-	// We'll use a large context window for the review
-	fmt.Println("🤖 Querying LLM for review...")
-	resp, err := e.llmClient.GenerateCompletion(context.Background(), llm.CompletionRequest{
-		Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: llm.SystemPrompt},
-			{Role: llm.RoleUser, Content: prompt},
-		},
-		Temperature: 0.2, // Low temp for more analytical output
-		MaxTokens:   8192, // Increased from 4096 to allow longer responses
-	})
-	if err != nil {
-		return nil, fmt.Errorf("LLM review failed: %w", err)
-	}
-
-	// 6. Filter LLM output to only issues related to actual code changes
-	filteredLLMOutput := e.filterLLMOutputToChanges(resp.Content, diff, localResult.FileAnalysis)
-
-	// 7. Synthesize Report with token usage
-	tokenUsage := TokenUsage{
-		InputTokens:  resp.Usage.PromptTokens,
-		OutputTokens: resp.Usage.CompletionTokens,
-		TotalTokens:  resp.Usage.TotalTokens,
-	}
-	report := e.synthesizer.Synthesize(filteredLLMOutput, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage, localResult.SimilarityCheckLimited, localResult.SimilarityCheckReason, dbQueryReviews)
-
-	// 7.5. Populate sampling information
-	e.populateSamplingInfo(report, diff, sampledDiff, samplingReport)
-
-	// 8. Populate duplicate blocks and AI patterns for HTML report
-	e.populateDuplicateBlocks(report, exactDupDetector, localResult, diff)
-	e.populateAIPatterns(report, localResult, diff)
-
-	// 9. Generate HTML report if enabled
-	if e.shouldGenerateHTML() {
-		if err := e.generateHTMLReport(report, diff, e.diffRange); err != nil {
-			// Log error but don't fail the review
-			fmt.Printf("Warning: Failed to generate HTML report: %v\n", err)
-		}
-	}
-
-	// 10. Generate GFM report if enabled
-	if e.shouldGenerateGFM() {
-		if err := e.generateGFMReport(report, diff, e.diffRange); err != nil {
-			// Log error but don't fail the review
-			fmt.Printf("Warning: Failed to generate GFM report: %v\n", err)
-		}
-	}
-
-	return report, nil
+	// 4. Always use chunked review -- the chunker handles both small and large
+	// prompts correctly, computing output tokens dynamically per chunk.
+	return e.performChunkedReview(diff, localResult, staticIssues, duplicateWarnings, &classification, sampledDiff, samplingReport, exactDupDetector, dbQueryReviews)
 }
 
 // ChunkResult represents the result of reviewing a single chunk
@@ -438,7 +350,7 @@ func (e *ReviewEngine) performChunkedReview(
 ) (*ReviewReport, error) {
 	
 	// 1. Create chunks
-	modelLimit := llm.GetModelTokenLimit(e.llmClient.GetModel())
+	modelLimit := llm.GetModelTokenLimitWithConfig(e.llmClient.GetModel(), e.config.LLM.MaxInputTokens)
 	chunker := NewReviewChunker(
 		modelLimit,
 		1000, // buffer (reduced from 2000 to allow more content)
@@ -833,132 +745,9 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 	}
 	fmt.Println()
 
-	// 4. Build Review Context for LLM with sampled diff
-	fmt.Println("📝 Building review prompt for LLM...")
-	fmt.Println("   ⏳ Formatting sampled diff...")
-	diffString := sampledDiff.Format()
-	fmt.Printf("   ✓ Diff formatted (%d chars)\n", len(diffString))
-
-	// Truncate static issues and duplicate warnings to prevent information overload
-	// Use higher limits for full repo reviews since we have more token capacity
-	fmt.Println("   ⏳ Truncating static issues and duplicates...")
-	const MAX_STATIC_ISSUES_FULL_REPO = 30
-	const MAX_DUPLICATE_WARNINGS_FULL_REPO = 20
-	
-	truncatedStaticIssues := staticIssues
-	if len(truncatedStaticIssues) > MAX_STATIC_ISSUES_FULL_REPO {
-		// Prioritize high-severity issues
-		truncatedStaticIssues = prioritizeIssues(staticIssues, MAX_STATIC_ISSUES_FULL_REPO)
-	}
-	fmt.Printf("   ✓ Static issues: %d (truncated from %d)\n", len(truncatedStaticIssues), len(staticIssues))
-	
-	truncatedDuplicateWarnings := duplicateWarnings
-	if len(truncatedDuplicateWarnings) > MAX_DUPLICATE_WARNINGS_FULL_REPO {
-		truncatedDuplicateWarnings = duplicateWarnings[:MAX_DUPLICATE_WARNINGS_FULL_REPO]
-	}
-	fmt.Printf("   ✓ Duplicate warnings: %d (truncated from %d)\n", len(truncatedDuplicateWarnings), len(duplicateWarnings))
-
-	fmt.Println("   ⏳ Building review context...")
-	reviewCtx := llm.ReviewContext{
-		Diff:           diffString,
-		Frameworks:     []string{}, // TODO: Load from context.json if available
-		Languages:      detectLanguages(diff),
-		StaticIssues:   truncatedStaticIssues,
-		SimilarCode:    truncatedDuplicateWarnings,
-		FileContext:    fmt.Sprintf("Full repository review: %d files (Sampled: %d/%d files)", len(diff.Files), samplingReport.SampledFiles, samplingReport.TotalFiles),
-		Classification: fmt.Sprintf("%s (Confidence: %.2f)", classification.Type, classification.Confidence),
-	}
-	fmt.Println("   ✓ Review context built")
-
-	// 5. Generate Prompt (with full repository context)
-	fmt.Println("   ⏳ Building LLM prompt...")
-	prompt := e.pmtBuilder.BuildReviewPrompt(reviewCtx, true) // true = isFullRepository
-	fmt.Printf("   ✓ Prompt built (%d chars)\n", len(prompt))
-
-	// 5.5. Validate prompt size and determine if chunking is needed
-	modelLimit := llm.GetModelTokenLimit(e.llmClient.GetModel())
-	valid, totalTokens, validationErr := llm.ValidatePromptSize(llm.SystemPrompt, prompt, modelLimit, 1000)
-	
-	if !valid {
-		fmt.Printf("⚠️  Prompt size (%d tokens) exceeds model limit (%d tokens). Using chunked review for full repository...\n", totalTokens, modelLimit)
-		return e.performChunkedFullRepositoryReview(diff, localResult, staticIssues, duplicateWarnings, &classification, sampledDiff, samplingReport, exactDupDetector, dbQueryReviews)
-	}
-	
-	_ = validationErr // Suppress unused variable warning
-
-	// 6. Query LLM with timeout
-	fmt.Println("🤖 Querying LLM for comprehensive repository review...")
-	fmt.Printf("   📝 Prompt size: ~%d tokens (model limit: %d)\n", totalTokens, modelLimit)
-	fmt.Println("   ⏱️  This may take several minutes for large repositories...")
-	
-	// Add timeout context (15 minutes for full repo reviews)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-	defer cancel()
-	
-	// Start a goroutine to show progress
-	progressDone := make(chan bool)
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				fmt.Println("   ⏳ Still processing... (this is normal for large repositories)")
-			case <-progressDone:
-				return
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-	defer func() { progressDone <- true }()
-	
-	// Use high token limit for full repository reviews to ensure all issues are captured
-	// MaxTokens=0 tells providers to use their max (Anthropic: 32768, OpenAI: handled by provider)
-	resp, err := e.llmClient.GenerateCompletion(ctx, llm.CompletionRequest{
-		Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: llm.SystemPrompt},
-			{Role: llm.RoleUser, Content: prompt},
-		},
-		Temperature: 0.2,
-		MaxTokens:   0, // No limit - let provider use max tokens for comprehensive output
-	})
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return nil, fmt.Errorf("LLM review timed out after 15 minutes. The repository is too large for a single review. The system will automatically use chunked review for repositories this large")
-		}
-		return nil, fmt.Errorf("LLM review failed: %w", err)
-	}
-	
-	fmt.Println("   ✓ LLM review completed successfully")
-
-	// 7. Synthesize Report with token usage
-	fmt.Println("📋 Synthesizing review report...")
-	tokenUsage := TokenUsage{
-		InputTokens:  resp.Usage.PromptTokens,
-		OutputTokens: resp.Usage.CompletionTokens,
-		TotalTokens:  resp.Usage.TotalTokens,
-	}
-	report := e.synthesizer.Synthesize(resp.Content, staticIssues, duplicateWarnings, localResult.FileAnalysis, tokenUsage, localResult.SimilarityCheckLimited, localResult.SimilarityCheckReason, dbQueryReviews)
-
-	// 7.5. Populate sampling information
-	e.populateSamplingInfo(report, diff, sampledDiff, samplingReport)
-
-	// 8. Populate duplicate blocks and AI patterns for HTML report
-	// For full repository, we analyze all files (not just changed code)
-	// exactDupDetector is already created above in step 2
-	e.populateDuplicateBlocks(report, exactDupDetector, localResult, diff)
-	// For full repo, analyze all code (not just changed lines)
-	e.populateAIPatternsFullRepo(report, localResult)
-
-	// 9. Generate HTML report if enabled
-	if e.shouldGenerateHTML() {
-		if err := e.generateHTMLReport(report, diff, e.diffRange); err != nil {
-			fmt.Printf("Warning: Failed to generate HTML report: %v\n", err)
-		}
-	}
-
-	return report, nil
+	// 4. Always use chunked review -- the chunker handles both small and large
+	// prompts correctly, computing output tokens dynamically per chunk.
+	return e.performChunkedFullRepositoryReview(diff, localResult, staticIssues, duplicateWarnings, &classification, sampledDiff, samplingReport, exactDupDetector, dbQueryReviews)
 }
 
 // performChunkedFullRepositoryReview handles full repository reviews that exceed token limits by splitting into chunks
@@ -975,7 +764,7 @@ func (e *ReviewEngine) performChunkedFullRepositoryReview(
 ) (*ReviewReport, error) {
 	
 	// 1. Create chunks
-	modelLimit := llm.GetModelTokenLimit(e.llmClient.GetModel())
+	modelLimit := llm.GetModelTokenLimitWithConfig(e.llmClient.GetModel(), e.config.LLM.MaxInputTokens)
 	chunker := NewReviewChunker(
 		modelLimit,
 		1000, // buffer

@@ -69,7 +69,7 @@ mv katich /usr/local/bin/
 ```
 
 ### Configuration
-Create a `.katich/config.yaml` in your home directory or project root. The project name is automatically extracted from your Git repository during `katich init`.
+Create a `.katich/config.yaml` in your project root (e.g. via `katich init`). The project name is automatically extracted from your Git repository during `katich init`. For a full list of options with comments, see **`.katich/config.example.yaml`** in the repo.
 
 #### 1. Local LLM (Ollama) - Recommended for Privacy
 ```yaml
@@ -180,75 +180,62 @@ All API keys can be overridden via environment variables (takes precedence over 
     katich init
     ```
 
-2.  **Initialize Context**: First, let Katichai learn your codebase.
+2.  **Build context** (optional but recommended): Analyze the codebase and generate embeddings.
     ```bash
     katich context build
     ```
+    Use `katich context build --incremental` (default) to only process changed files; use `--force` for a full rebuild. Use `--publish` to push `context.json` and `embeddings.json` to your Git remote (e.g. for centralized context).
 
-2.  **Review Changes**: Run a review on your current work.
+3.  **Review changes**: Run a review on your current work.
     ```bash
     katich review latest
     ```
 
-3.  **Review Specific Diff**:
+4.  **Review a specific diff**:
     ```bash
     katich review diff main..feature-branch
     ```
 
+### Context source (local vs remote)
+In `.katich/config.yaml`, `context.source` can be `local` (use `.katich/` on disk) or `remote` (fetch `context.json` and `embeddings.json` from your Git origin). When `remote`, review commands run `git fetch` and use the files from `context.remote.branch` and `context.remote.directory`. No GitHub token is required if you can push/pull with normal Git credentials.
+
+### Embeddings (API)
+When using OpenAI for embeddings (e.g. large repos), requests are sent in batches of 100 with a 2-minute timeout per batch and up to 3 retries with backoff. If you see timeouts, check network and API status; the tool continues without embeddings if generation fails so reviews still run (without semantic similarity).
+
 ## ⚡ Token Limits and Parallel Chunking
 
-Katichai automatically handles large code reviews that exceed LLM token limits:
+Katichai uses **optimistic chunking**: every review runs through the chunked pipeline so token limits and output size are always handled correctly, with no single-shot path that can hit context-window errors.
 
 ### How It Works
-1. **Automatic Detection**: Before sending to the LLM, Katichai validates if the prompt fits within the model's context window (e.g., 8K for GPT-4, 128K for GPT-4-Turbo, 200K for Claude).
-2. **Intelligent Chunking**: If the review is too large, it's split into self-contained chunks based on:
-   - Security-related files (prioritized)
-   - Related files in the same module/package
-   - File size and complexity
-3. **Parallel Processing**: Chunks are reviewed concurrently using goroutines with a semaphore (max 3 concurrent requests to avoid API throttling).
-4. **TPM-Aware Scheduling**: Before sending chunks, Katichai estimates their token cost and groups them into 60-second windows so the total never exceeds your `tokens_per_minute` limit. Windows are processed sequentially with automatic inter-window pausing.
-5. **Smart Merging**: Results are deduplicated and merged into a unified report. A final AI call normalizes all chunk summaries into one coherent overview instead of scattered per-chunk paragraphs.
-
-### Performance Benefits
-- **Single-shot review**: ~30s for large PRs (if within token limits)
-- **Parallel chunked review**: ~10-15s for same PRs (3x faster with chunking)
-- **No token limit errors**: Reviews of any size complete successfully
+1. **Model limits**: Context window size is auto-detected from the model name (GPT-4, GPT-4o, Claude, Llama, Mistral, Gemma, etc.). Override with `llm.max_input_tokens` in config if needed.
+2. **Chunking**: The review payload is split into self-contained chunks (security-related and high-risk files first, then by module/size). Each chunk gets a dynamic `max_tokens` so input + output never exceeds the model limit.
+3. **Parallel processing**: Chunks are reviewed with up to 3 concurrent requests; TPM-aware scheduling groups chunks into 60-second windows so the total stays under `tokens_per_minute`.
+4. **Merging**: Chunk results are deduplicated and merged; a final AI step normalizes summaries into one coherent report.
 
 ### Configuration
-You can adjust the token budget and TPM limit in `.katich/config.yaml`:
+In `.katich/config.yaml`:
 
 ```yaml
 llm:
-  max_input_tokens: 20000   # Adjust based on your model's context window
-  tokens_per_minute: 90000  # Set to your API tier's TPM limit (0 = disabled)
+  max_input_tokens: 0        # 0 = auto-detect from model name; set to override
+  tokens_per_minute: 90000  # Your API tier's TPM limit (0 = disabled)
 ```
 
-Common TPM values by tier:
-| Provider | Tier | Typical TPM |
-|---|---|---|
-| OpenAI GPT-4 | Tier 1 | 30,000 |
-| OpenAI GPT-4 | Tier 2 | 90,000 |
-| OpenAI GPT-4-Turbo | Tier 3+ | 300,000+ |
-| Anthropic Claude 3.5 | Standard | 40,000 |
+Common TPM values: OpenAI Tier 1 ~30K, Tier 2 ~90K; Claude standard ~40K. See `.katich/config.example.yaml` for all options.
 
 ### What You'll See
-When chunking and TPM scheduling are active, you'll see progress updates:
+When multiple chunks or TPM windows are used:
 
 ```
-⚠️  Prompt size (25000 tokens) exceeds model limit (8192 tokens). Using chunked review...
-📦 Split into 6 chunks across 2 TPM windows
+📦 Split into 6 chunks for parallel review
 🤖 Reviewing chunk 1/6...
 🤖 Reviewing chunk 2/6...
-🤖 Reviewing chunk 3/6...
 ⏳ Window 1/2 done. Waiting 47s before next batch to respect TPM limit...
-🤖 Reviewing chunk 4/6...
-🤖 Reviewing chunk 5/6...
-🤖 Reviewing chunk 6/6...
 🔄 Merging chunk results...
 🔀 Normalizing 2 chunk summaries into a unified summary...
 ```
 
-The final report is identical in format to a single-shot review — you get comprehensive coverage without token limit or rate limit errors.
+The final report format is the same whether the review was one chunk or many — no token limit or rate limit errors.
 
 ## 📝 Example Output
 

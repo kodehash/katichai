@@ -1,20 +1,109 @@
-# Example Katichai Configuration
+# ═══════════════════════════════════════════════════════════════════════════════
+# Katich AI — Full configuration reference
+# ═══════════════════════════════════════════════════════════════════════════════
+# Copy to .katich/config.yaml and adjust. Options you don't need can be omitted;
+# defaults are applied automatically. Use this file as a reference for all keys.
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# LLM Configuration
+# Project identifier (optional). Often auto-set from Git remote during `katich init`.
+# Used by API server to return the right API key when api_server.enabled is true.
+# project_name: my-project
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LLM (review model)
+# ─────────────────────────────────────────────────────────────────────────────
 llm:
-  provider: openai  # Options: openai, anthropic, local
-  api_key: ""       # Or set via OPENAI_API_KEY / ANTHROPIC_API_KEY env var
-  model: gpt-4      # Model to use for final review synthesis
-  # base_url: http://localhost:11434  # For local LLMs (Ollama, LM Studio)
+  # Provider: openai | anthropic | ollama (local)
+  provider: openai
 
-# Embeddings Configuration
+  # API key. Prefer env vars in CI: OPENAI_API_KEY, ANTHROPIC_API_KEY, or KATICH_LLM_API_KEY
+  api_key: ""
+
+  # Model name. Examples: gpt-4o, gpt-4, claude-3-5-sonnet-20241022, llama3, llama3.1
+  model: gpt-4o
+
+  # For provider: ollama — base URL of your local server
+  # base_url: http://localhost:11434
+
+  # Override detected context window (tokens). Leave 0 to auto-detect from model name.
+  # Set only if your model isn't recognized or you want a stricter limit.
+  max_input_tokens: 0
+
+  # Tokens per minute (TPM) rate limit. Katich schedules chunked reviews to stay under this.
+  # Set to your API tier limit; use 0 to disable TPM scheduling.
+  tokens_per_minute: 90000
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Embeddings (semantic similarity and context)
+# ─────────────────────────────────────────────────────────────────────────────
+# Embeddings use a hybrid provider: Ollama (nomic-embed-text) if available,
+# otherwise OpenAI (text-embedding-3-small). No need to set provider/model unless
+# you rely on the defaults. For API embeddings, set api_key (or OPENAI_API_KEY).
 embeddings:
-  model: jina-code-v2  # Options: jina-code-v2, bge-code, nomic-embed, snowflake-arctic
-  provider: local      # Options: local, api
-  # api_key: ""        # Required if provider is 'api'
+  # Model name (e.g. jina-code-v2 for local, text-embedding-3-small for API)
+  model: text-embedding-3-small
 
-# Analysis Configuration
+  # Provider: local | api. "local" prefers Ollama when running; "api" uses OpenAI.
+  provider: api
+
+  # Required when provider is api. Can use OPENAI_API_KEY or KATICH_EMBEDDINGS_API_KEY
+  api_key: ""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Context source (where to load context.json and embeddings.json)
+# ─────────────────────────────────────────────────────────────────────────────
+# Build context with: katich context build (incremental, default)
+#   --incremental / -i  only changed files (default; same-branch only)
+#   --force / -f        full rebuild (ignore .last_build_state)
+#   --publish           push context.json + embeddings.json to remote (branch/directory below)
+context:
+  # local = use .katich/ on disk (default). remote = fetch from Git origin.
+  source: local
+
+  remote:
+    # Branch to fetch from when source: remote (e.g. main, develop)
+    branch: main
+    # Directory in that branch containing context.json and embeddings.json
+    directory: katich-ai-context
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Review output
+# ─────────────────────────────────────────────────────────────────────────────
+review:
+  generate_html: true
+  html_output_path: .katich/reports
+
+  # GFM = GitHub Flavored Markdown; good for PR comments and Actions summary
+  generate_gfm: false
+  gfm_output_path: .katich/reports
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Static analysis & sampling
+# ─────────────────────────────────────────────────────────────────────────────
 analysis:
-  max_function_length: 50    # Maximum recommended function length (lines)
-  complexity_threshold: 10   # Maximum cyclomatic complexity
-  similarity_threshold: 0.85 # Threshold for duplicate detection (0.0-1.0)
+  max_function_length: 50
+  complexity_threshold: 10
+  similarity_threshold: 0.70
+
+  # Similarity / duplication detection
+  min_function_lines: 5
+  duplicate_threshold: 0.85
+  ignore_trivial_patterns: true
+
+  sampling:
+    enabled: true
+    max_files: 50
+    context_lines: 2
+    skip_generated: true
+    skip_tests: false
+    adaptive_budget: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Centralized API server (optional)
+# ─────────────────────────────────────────────────────────────────────────────
+# When enabled, LLM api_key is fetched from your server instead of config.
+# Set KATICH_API_SERVER_URL and KATICH_API_TOKEN (or use config below).
+# api_server:
+#   enabled: true
+#   url: https://api.example.com/api/v1/keys
+#   token: ""

@@ -69,6 +69,12 @@ review:
   generate_html: true
   html_output_path: .katich/reports
 
+context:
+  source: local     # local or remote
+  remote:
+    branch: main
+    directory: katich-ai-context
+
 analysis:
   max_function_length: 50
   complexity_threshold: 10
