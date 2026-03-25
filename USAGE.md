@@ -260,7 +260,7 @@ katich context build -f                # Same as --force
 **What it does:**
 - Analyzes source files (all, or only changed when incremental)
 - Generates code metrics and complexity analysis
-- Creates embeddings for semantic code understanding (batches of 100 for API, with retries)
+- Creates embeddings for semantic code understanding (token-aware batching for API, with retries and auto-splitting)
 - Saves context to `.katich/context.json` and `.katich/embeddings.json`
 - Build state (branch + commit) is stored in `.katich/.last_build_state` for incremental builds
 
@@ -869,12 +869,24 @@ llm:
 
 ### Issue: "context deadline exceeded" / "Client.Timeout exceeded" when generating embeddings
 
-**Cause:** The OpenAI embeddings API call timed out (e.g. many files in one go or slow network).
+**Cause:** The OpenAI embeddings API call timed out (e.g. slow network or very large batch).
 
 **Solution:**
-- Katich now sends embeddings in **batches of 100** with a **2-minute timeout** per batch and **up to 3 retries** with backoff. Updating to the latest release should resolve most timeouts.
-- If it still happens: check network and OpenAI status; use a smaller repo or run `katich context build --incremental` so only changed files need new embeddings.
+- Katich forms batches by **estimated token total** (capped at 250k tokens and 2048 inputs per request) with a **2-minute HTTP timeout** per batch.
+- Large code snippets are **truncated to ~7500 estimated tokens** before embedding to stay under the 8192-token per-input API limit.
+- Transient failures are retried up to **3 times** with exponential backoff.
+- If it still happens: check network and OpenAI status; use `katich context build --incremental` so only changed files need new embeddings.
 - If embeddings fail, the tool continues without them (reviews still run, but without semantic similarity).
+
+### Issue: "token limit" / "too many tokens" when generating embeddings
+
+**Cause:** A batch of code snippets exceeded the OpenAI embeddings API token limit (8192 per input or 300k total per request), despite proactive batching.
+
+**Solution:**
+- Katich automatically **splits the failing batch in half** and retries each half. This happens recursively up to **3 times** (so the batch can be subdivided up to 8 ways).
+- If a single snippet still exceeds the limit, an **emergency truncation** (halving the text) is applied and retried once.
+- After 3 split attempts with continued failure, the error is reported and context build continues without embeddings.
+- You will see messages like `"Token limit hit for batch of N items (depth D), splitting..."` in the console when this happens.
 
 ### Issue: "This model's maximum context length is X tokens... you requested Y"
 

@@ -182,18 +182,37 @@ func (g *Generator) GenerateForAnalysis(analysisResult *analysis.AnalysisResult,
 	return index, nil
 }
 
-// createCodeSnippet creates a code snippet for embedding
+// OpenAI embeddings API accepts at most 8192 tokens per input string.
+// We cap at 7500 estimated tokens to leave a safety margin for the
+// chars-per-token heuristic (1 token ≈ 4 characters).
+const maxEmbeddingInputTokens = 7500
+
+func truncateForEmbedding(text string) string {
+	maxChars := maxEmbeddingInputTokens * 4
+	if len(text) <= maxChars {
+		return text
+	}
+	return text[:maxChars] + "\n... [truncated for embedding]"
+}
+
+func estimateTokens(text string) int {
+	if text == "" {
+		return 0
+	}
+	return len(text) / 4
+}
+
+// createCodeSnippet creates a code snippet for embedding.
+// The result is truncated to fit within the OpenAI per-input token limit
+// so that the stored Code field matches the text that was actually embedded.
 func (g *Generator) createCodeSnippet(fn analysis.FunctionInfo, language string) string {
-	// Use actual function body for better semantic matching
 	snippet := fmt.Sprintf("// Language: %s\n", language)
 	snippet += fmt.Sprintf("// Function: %s\n", fn.Name)
 	snippet += fmt.Sprintf("// Complexity: %d, LOC: %d\n", fn.Complexity, fn.LOC)
-	
-	// Include actual body for semantic similarity
+
 	if fn.Body != "" {
 		snippet += fn.Body
 	} else {
-		// Fallback to metadata if body not available
 		if len(fn.Parameters) > 0 {
 			snippet += fmt.Sprintf("// Parameters: %v\n", fn.Parameters)
 		}
@@ -201,8 +220,8 @@ func (g *Generator) createCodeSnippet(fn analysis.FunctionInfo, language string)
 			snippet += fmt.Sprintf("// Returns: %s\n", fn.ReturnType)
 		}
 	}
-	
-	return snippet
+
+	return truncateForEmbedding(snippet)
 }
 
 // generateID generates a unique ID for a code block

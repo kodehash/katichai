@@ -226,60 +226,156 @@ func (p *OpenAIProvider) GetName() string {
 	return "OpenAI"
 }
 
-// GenerateBatchEmbeddings generates embeddings for multiple texts in batches.
-// Uses small batches (100) to avoid timeouts on large repos and retries
-// transient failures with exponential backoff.
-func (p *OpenAIProvider) GenerateBatchEmbeddings(texts []string) ([][]float32, error) {
-	const batchSize = 100
-	const maxRetries = 3
+// OpenAI embeddings API limits.
+const (
+	maxPerInputTokens   = 7500    // conservative cap per string (API limit: 8192)
+	maxBatchTotalTokens = 250_000 // margin under OpenAI's 300k per-request sum
+	maxBatchInputs      = 2048    // API array cap
+	maxSplitDepth       = 3       // recursion limit for adaptive batch splitting
+	maxRetries          = 3       // retries for transient (non-token) errors
+)
 
+func embEstimateTokens(s string) int {
+	if s == "" {
+		return 0
+	}
+	return len(s) / 4
+}
+
+func embTruncate(text string, maxTokens int) string {
+	maxChars := maxTokens * 4
+	if len(text) <= maxChars {
+		return text
+	}
+	return text[:maxChars] + "\n... [truncated for embedding]"
+}
+
+// GenerateBatchEmbeddings generates embeddings for multiple texts.
+// Batches are formed by estimated token sum (250k cap, 2048 inputs) rather
+// than a fixed item count. Each batch is sent through sendBatchWithSplit
+// which adaptively splits on token-limit errors (up to 3 recursions).
+func (p *OpenAIProvider) GenerateBatchEmbeddings(texts []string) ([][]float32, error) {
 	if len(texts) == 0 {
 		return [][]float32{}, nil
 	}
 
 	allEmbeddings := make([][]float32, 0, len(texts))
-	totalBatches := (len(texts) + batchSize - 1) / batchSize
 
-	for i := 0; i < len(texts); i += batchSize {
-		end := i + batchSize
-		if end > len(texts) {
-			end = len(texts)
+	var currentBatch []string
+	batchTokens := 0
+	batchNum := 0
+	truncated := 0
+
+	flush := func() error {
+		if len(currentBatch) == 0 {
+			return nil
 		}
-		batch := texts[i:end]
-		batchNum := i/batchSize + 1
+		batchNum++
+		result, err := p.sendBatchWithSplit(currentBatch, 0)
+		if err != nil {
+			return fmt.Errorf("batch %d failed: %w", batchNum, err)
+		}
+		allEmbeddings = append(allEmbeddings, result...)
+		fmt.Printf("  📦 Batch %d complete (%d embeddings)\n", batchNum, len(result))
+		currentBatch = nil
+		batchTokens = 0
+		return nil
+	}
 
-		var batchEmbeddings [][]float32
-		var lastErr error
+	for _, text := range texts {
+		t := embTruncate(text, maxPerInputTokens)
+		if len(t) < len(text) {
+			truncated++
+		}
+		tok := embEstimateTokens(t)
 
-		for attempt := 0; attempt < maxRetries; attempt++ {
-			if attempt > 0 {
-				backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
-				fmt.Printf("  ⏳ Retry %d/%d for batch %d/%d (waiting %s)...\n", attempt, maxRetries-1, batchNum, totalBatches, backoff)
-				time.Sleep(backoff)
+		if len(currentBatch) > 0 && (batchTokens+tok > maxBatchTotalTokens || len(currentBatch) >= maxBatchInputs) {
+			if err := flush(); err != nil {
+				return nil, err
 			}
-
-			batchEmbeddings, lastErr = p.sendEmbeddingBatch(batch)
-			if lastErr == nil {
-				break
-			}
-
-			if isNonRetryableError(lastErr) {
-				return nil, lastErr
-			}
 		}
 
-		if lastErr != nil {
-			return nil, fmt.Errorf("batch %d/%d failed after %d attempts: %w", batchNum, totalBatches, maxRetries, lastErr)
-		}
+		currentBatch = append(currentBatch, t)
+		batchTokens += tok
+	}
 
-		allEmbeddings = append(allEmbeddings, batchEmbeddings...)
+	if err := flush(); err != nil {
+		return nil, err
+	}
 
-		if totalBatches > 1 {
-			fmt.Printf("  📦 Batch %d/%d complete (%d embeddings)\n", batchNum, totalBatches, len(batchEmbeddings))
-		}
+	if truncated > 0 {
+		fmt.Printf("  ⚠️  %d snippet(s) truncated to fit embedding token limit\n", truncated)
 	}
 
 	return allEmbeddings, nil
+}
+
+// sendBatchWithSplit sends a batch to the OpenAI API. On token-limit errors
+// it splits the batch in half and retries each half recursively (max depth 3).
+// Transient errors (timeout, 429 rate limit, 5xx) are retried with backoff.
+// Non-retryable errors (quota, auth) fail immediately.
+func (p *OpenAIProvider) sendBatchWithSplit(batch []string, depth int) ([][]float32, error) {
+	result, err := p.sendEmbeddingBatch(batch)
+	if err == nil {
+		return result, nil
+	}
+
+	// 1. Non-retryable (quota, auth) — fail immediately.
+	if isNonRetryableError(err) {
+		return nil, err
+	}
+
+	// 2. Token-limit error — split rather than retry same payload.
+	if isTokenLimitError(err) {
+		if depth >= maxSplitDepth {
+			return nil, fmt.Errorf("token limit exceeded after %d split attempts (%d items remaining): %w", maxSplitDepth, len(batch), err)
+		}
+
+		if len(batch) == 1 {
+			emergency := embTruncate(batch[0], maxPerInputTokens/2)
+			fmt.Printf("  ⚠️  Single item too large; emergency truncating to ~%d tokens\n", maxPerInputTokens/2)
+			result, retryErr := p.sendEmbeddingBatch([]string{emergency})
+			if retryErr != nil {
+				return nil, fmt.Errorf("single item still exceeds token limit after emergency truncation: %w", retryErr)
+			}
+			return result, nil
+		}
+
+		mid := len(batch) / 2
+		fmt.Printf("  🔀 Token limit hit for batch of %d items (depth %d), splitting...\n", len(batch), depth)
+
+		left, leftErr := p.sendBatchWithSplit(batch[:mid], depth+1)
+		if leftErr != nil {
+			return nil, leftErr
+		}
+		right, rightErr := p.sendBatchWithSplit(batch[mid:], depth+1)
+		if rightErr != nil {
+			return nil, rightErr
+		}
+		return append(left, right...), nil
+	}
+
+	// 3. Transient error — retry with exponential backoff.
+	var lastErr error = err
+	for attempt := 1; attempt < maxRetries; attempt++ {
+		backoff := time.Duration(math.Pow(2, float64(attempt))) * time.Second
+		fmt.Printf("  ⏳ Retry %d/%d (waiting %s)...\n", attempt, maxRetries-1, backoff)
+		time.Sleep(backoff)
+
+		result, retryErr := p.sendEmbeddingBatch(batch)
+		if retryErr == nil {
+			return result, nil
+		}
+		if isNonRetryableError(retryErr) {
+			return nil, retryErr
+		}
+		if isTokenLimitError(retryErr) {
+			return p.sendBatchWithSplit(batch, depth)
+		}
+		lastErr = retryErr
+	}
+
+	return nil, fmt.Errorf("batch failed after %d retries: %w", maxRetries, lastErr)
 }
 
 // sendEmbeddingBatch sends a single batch to the OpenAI embeddings API.
@@ -367,6 +463,31 @@ func isNonRetryableError(err error) bool {
 		strings.Contains(msg, "insufficient_quota") ||
 		strings.Contains(msg, "invalid_api_key") ||
 		strings.Contains(msg, "authentication")
+}
+
+// isTokenLimitError returns true when the API rejects a request because of
+// per-input or per-request token limits (HTTP 400). Must NOT match 429
+// rate-limit errors which mention "tokens per minute".
+func isTokenLimitError(err error) bool {
+	msg := strings.ToLower(err.Error())
+	indicators := []string{
+		"maximum context length",
+		"max_tokens",
+		"too many tokens",
+		"token limit",
+		"total tokens",
+		"8192 tokens",
+		"300000",
+		"exceeds the model",
+		"string too long",
+		"input too long",
+	}
+	for _, ind := range indicators {
+		if strings.Contains(msg, ind) {
+			return true
+		}
+	}
+	return false
 }
 
 // HybridProvider tries Ollama first, falls back to OpenAI
