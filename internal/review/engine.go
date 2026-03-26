@@ -496,7 +496,21 @@ func (e *ReviewEngine) performChunkedReview(
 	
 	// 7. Populate duplicate blocks and AI patterns for HTML report
 	e.populateDuplicateBlocks(report, exactDupDetector, localResult, diff)
-	e.populateAIPatterns(report, localResult, diff)
+	if e.config.Review.DetectAICode {
+		e.populateAIPatterns(report, localResult, diff)
+	} else {
+		// Strip AIScore from file analysis so formatters don't render it
+		for _, fa := range report.FileAnalysis {
+			if fa != nil {
+				fa.AIScore = nil
+			}
+		}
+	}
+
+	// 7.5. Generate fix prompt if enabled
+	if e.config.Review.GenerateFixPrompt {
+		report.FixPrompt = e.synthesizer.BuildFixPrompt(report)
+	}
 	
 	// 8. Generate HTML report if enabled
 	if e.shouldGenerateHTML() {
@@ -933,7 +947,20 @@ func (e *ReviewEngine) performChunkedFullRepositoryReview(
 	
 	// 7. Populate duplicate blocks and AI patterns for HTML report
 	e.populateDuplicateBlocks(report, exactDupDetector, localResult, diff)
-	e.populateAIPatternsFullRepo(report, localResult)
+	if e.config.Review.DetectAICode {
+		e.populateAIPatternsFullRepo(report, localResult)
+	} else {
+		for _, fa := range report.FileAnalysis {
+			if fa != nil {
+				fa.AIScore = nil
+			}
+		}
+	}
+
+	// 7.5. Generate fix prompt if enabled
+	if e.config.Review.GenerateFixPrompt {
+		report.FixPrompt = e.synthesizer.BuildFixPrompt(report)
+	}
 	
 	// 8. Generate HTML report if enabled
 	if e.shouldGenerateHTML() {

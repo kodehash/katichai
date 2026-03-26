@@ -260,6 +260,17 @@ func (f *Formatter) FormatGFM(report *ReviewReport, fileContents map[string]stri
 		sb.WriteString("\n")
 	}
 
+	// Fix Prompt
+	if report.FixPrompt != "" {
+		sb.WriteString("## 🔧 Fix Prompt\n\n")
+		sb.WriteString("<details>\n")
+		sb.WriteString("<summary>Click to expand fix prompt for AI assistants</summary>\n\n")
+		sb.WriteString("```\n")
+		sb.WriteString(report.FixPrompt)
+		sb.WriteString("```\n\n")
+		sb.WriteString("</details>\n\n")
+	}
+
 	// Static Analysis
 	staticIssues := []ReviewIssue{}
 	for _, issue := range report.Issues {
@@ -419,6 +430,7 @@ func (f *Formatter) truncateToLimit(content string, maxLen int) string {
 		{0, 0, "Unnecessary Complexity", 3},
 		{0, 0, "DB/ORM Query Review", 2},
 		{0, 0, "Duplicate Code", 3},
+		{0, 0, "Fix Prompt", 2},
 		{0, 0, "AI-Generated Code Analysis", 3},
 		{0, 0, "Static Analysis", 4},
 	}
@@ -432,6 +444,7 @@ func (f *Formatter) truncateToLimit(content string, maxLen int) string {
 		"## 🔧 Unnecessary Complexity",
 		"## 🗄️ DB/ORM Query Review",
 		"## 🔄 Duplicate Code",
+		"## 🔧 Fix Prompt",
 		"## 🤖 AI-Generated Code Analysis",
 		"## 📊 Static Analysis",
 	}

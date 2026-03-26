@@ -119,6 +119,13 @@ Your role is to review code changes with a strict focus on architect-level conce
    - Detect "AI Slop": Boilerplate, hallucinatory APIs, or over-engineered abstractions.
    - Ignore minor formatting/nitpicks unless they severely violate readability.
 
+IMPORTANT EXCLUSIONS — Do NOT include the following in Critical Issues or Suggestions:
+- Function length / line count concerns (e.g., "function is too long", "split into smaller functions", "exceeds N lines")
+- Formatting, indentation, or style-only issues
+These are handled separately by static analysis and must not appear in your review output.
+Focus Critical Issues exclusively on: security vulnerabilities, architectural violations, performance regressions, breaking changes, and memory leaks.
+Focus Suggestions on: meaningful refactoring opportunities, design improvements, and best practices — NOT function length or line counts.
+
 7. UNNECESSARY COMPLEXITY DETECTION
    - Identify over-engineered code blocks AND architectural approaches where simpler solutions exist
    - Flag unnecessary abstractions, verbose implementations, over-nesting, and architectural over-complexity
@@ -150,12 +157,15 @@ Output your review in the following Markdown format:
 (Brief executive summary of the changes, highlighting key architectural, security, and performance concerns)
 
 ## Critical Issues (Blockers)
+(Do NOT include function-length, line-count, or formatting concerns here)
 - [SECURITY] Details of the issue with specific file and line location (format: file.go:123). Report each unique vulnerability ONCE.
 - [ARCHITECTURE] Details of the issue with specific location and impact...
 - [PERFORMANCE] Details of the issue with specific location and impact...
 - [BREAKING] Details of the issue with specific location and impact...
 
 ## Suggestions
+(Do NOT include function-length, line-count, or style-only concerns here)
+(Order by priority: security-related suggestions first, then architecture, then others)
 - Details of improvements (code quality, refactoring opportunities, best practices)...
 
 ## Unnecessary Complexity
@@ -235,14 +245,26 @@ func (p *PromptBuilder) BuildReviewPrompt(ctx ReviewContext, isFullRepository ..
 	}
 	sb.WriteString("\n")
 
-	// 2. Static Analysis signals (if any)
+	// 2. Static Analysis signals (if any) — exclude function_length (handled separately)
 	if len(ctx.StaticIssues) > 0 {
-		sb.WriteString("### Static Analysis Findings (Verify these)\n")
+		var hasNonLength bool
 		for _, issue := range ctx.StaticIssues {
-			sb.WriteString(fmt.Sprintf("- [%s] %s (Line %d): %s\n", 
-				issue.Severity, issue.Type, issue.Line, issue.Message))
+			if issue.Type == analysis.IssueTypeFunctionLength {
+				continue
+			}
+			hasNonLength = true
 		}
-		sb.WriteString("\n")
+		if hasNonLength {
+			sb.WriteString("### Static Analysis Findings (Verify these)\n")
+			for _, issue := range ctx.StaticIssues {
+				if issue.Type == analysis.IssueTypeFunctionLength {
+					continue
+				}
+				sb.WriteString(fmt.Sprintf("- [%s] %s (Line %d): %s\n",
+					issue.Severity, issue.Type, issue.Line, issue.Message))
+			}
+			sb.WriteString("\n")
+		}
 	}
 
 	// 3. Similarity/Duplication signals
@@ -348,14 +370,26 @@ func (p *PromptBuilder) BuildChunkReviewPrompt(chunk *ReviewChunk) string {
 	}
 	sb.WriteString("\n")
 	
-	// Static issues for this chunk
+	// Static issues for this chunk — exclude function_length (handled separately)
 	if len(chunk.StaticIssues) > 0 {
-		sb.WriteString("### Static Analysis Findings (Verify these)\n")
+		var hasNonLength bool
 		for _, issue := range chunk.StaticIssues {
-			sb.WriteString(fmt.Sprintf("- [%s] %s (Line %d): %s\n", 
-				issue.Severity, issue.Type, issue.Line, issue.Message))
+			if issue.Type == analysis.IssueTypeFunctionLength {
+				continue
+			}
+			hasNonLength = true
 		}
-		sb.WriteString("\n")
+		if hasNonLength {
+			sb.WriteString("### Static Analysis Findings (Verify these)\n")
+			for _, issue := range chunk.StaticIssues {
+				if issue.Type == analysis.IssueTypeFunctionLength {
+					continue
+				}
+				sb.WriteString(fmt.Sprintf("- [%s] %s (Line %d): %s\n",
+					issue.Severity, issue.Type, issue.Line, issue.Message))
+			}
+			sb.WriteString("\n")
+		}
 	}
 	
 	// Duplication warnings for this chunk

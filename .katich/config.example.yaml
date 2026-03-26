@@ -77,6 +77,14 @@ review:
   generate_gfm: false
   gfm_output_path: .katich/reports
 
+  # AI-generated code detection. Off by default; enable with --ai-detect flag or here.
+  detect_ai_code: false
+
+  # Generate a copy-pasteable fix prompt from review findings.
+  # Users can paste it into Cursor, Antigravity, or any AI coding assistant.
+  # Disable with --no-fix-prompt flag or set to false here.
+  generate_fix_prompt: true
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Static analysis & sampling
 # ─────────────────────────────────────────────────────────────────────────────

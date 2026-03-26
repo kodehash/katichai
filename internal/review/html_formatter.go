@@ -42,6 +42,9 @@ func (f *Formatter) FormatHTML(report *ReviewReport, fileContents map[string]str
                 <a href="#file-sampling" class="block px-3 py-2 rounded hover:bg-gray-100 mb-2 text-sm font-medium text-gray-700">📁 File Sampling</a>
                 {{end}}
                 <a href="#critical-issues" class="block px-3 py-2 rounded hover:bg-gray-100 mb-2 text-sm font-medium text-gray-700">⚠️ Critical Issues</a>
+                {{if .FixPrompt}}
+                <a href="#fix-prompt" class="block px-3 py-2 rounded hover:bg-gray-100 mb-2 text-sm font-medium text-gray-700">🔧 Fix Prompt</a>
+                {{end}}
                 {{if .HasComplexity}}
                 <a href="#complexity" class="block px-3 py-2 rounded hover:bg-gray-100 mt-2 text-sm font-medium text-gray-700">🔧 Unnecessary Complexity</a>
                 {{end}}
@@ -208,6 +211,25 @@ func (f *Formatter) FormatHTML(report *ReviewReport, fileContents map[string]str
                             {{end}}
                         </div>
                         {{end}}
+                    </div>
+                </div>
+            </section>
+            {{end}}
+
+            <!-- Fix Prompt -->
+            {{if .FixPrompt}}
+            <section id="fix-prompt" class="p-6 border-t border-gray-200">
+                <button onclick="toggleSection('fix-prompt-content')" class="flex items-center justify-between w-full text-left">
+                    <div>
+                        <h2 class="text-2xl font-bold text-gray-900">🔧 Fix Prompt</h2>
+                        <p class="text-sm text-gray-500 mt-1">Copy into Cursor, Antigravity, or any AI assistant</p>
+                    </div>
+                    <span class="text-gray-500" id="fix-prompt-toggle">▶</span>
+                </button>
+                <div id="fix-prompt-content" class="mt-4" style="display: none;">
+                    <div class="relative">
+                        <button onclick="copyFixPrompt()" id="copy-fix-btn" class="absolute top-2 right-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium px-3 py-1.5 rounded-md shadow transition-colors">Copy</button>
+                        <pre class="bg-gray-900 text-gray-100 p-4 pt-10 rounded-lg overflow-x-auto text-sm leading-relaxed border-l-4 border-indigo-500"><code id="fix-prompt-text">{{.FixPrompt}}</code></pre>
                     </div>
                 </div>
             </section>
@@ -538,6 +560,15 @@ func (f *Formatter) FormatHTML(report *ReviewReport, fileContents map[string]str
                 toggle.textContent = '▶';
             }
         }
+
+        function copyFixPrompt() {
+            const el = document.getElementById('fix-prompt-text');
+            if (!el) return;
+            navigator.clipboard.writeText(el.textContent).then(function() {
+                const btn = document.getElementById('copy-fix-btn');
+                if (btn) { btn.textContent = 'Copied!'; setTimeout(function(){ btn.textContent = 'Copy'; }, 2000); }
+            });
+        }
     </script>
 </body>
 </html>`
@@ -641,6 +672,7 @@ type htmlData struct {
 	StaticAnalysisIssues []staticAnalysisIssueHTML
 	StaticAnalysisByCategory []staticAnalysisCategoryHTML
 	Suggestions        []suggestionHTML
+	FixPrompt          string
 	DiffInfo           *DiffInfo
 	SamplingInfo       *samplingInfoHTML
 }
@@ -734,6 +766,7 @@ func (f *Formatter) prepareHTMLData(report *ReviewReport, fileContents map[strin
 		// Score:              report.Score,   // Commented out - scoring is subjective
 		Summary:            report.Summary,
 		Suggestions:        f.parseSuggestions(report.Suggestions),
+		FixPrompt:          report.FixPrompt,
 		DiffInfo:           diffInfo,
 		FileCount:          len(report.FileAnalysis),
 		CriticalIssueCount: 0,

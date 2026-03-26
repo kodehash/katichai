@@ -56,7 +56,6 @@ func (f *Formatter) FormatText(report *ReviewReport) string {
 		if issue.Category == "STATIC_ANALYSIS" {
 			staticIssues = append(staticIssues, issue)
 		} else if strings.Contains(issue.Description, "duplicate") || strings.Contains(issue.Description, "Duplicate") {
-			// Count duplicates for summary, don't show details
 			duplicateCount++
 		} else {
 			criticalIssues = append(criticalIssues, issue)
@@ -64,19 +63,26 @@ func (f *Formatter) FormatText(report *ReviewReport) string {
 	}
 	
 	if len(criticalIssues) > 0 {
-		sb.WriteString("⚠️  CRITICAL ISSUES\n")
-		for _, issue := range criticalIssues {
-			icon := "🔴"
-			if issue.Severity == "WARNING" {
-				icon = "🟡"
-			}
+		sb.WriteString(fmt.Sprintf("⚠️  CRITICAL ISSUES (%d found)\n", len(criticalIssues)))
+		sb.WriteString("────────────────────────────────────────────────────────────\n")
 
-			sb.WriteString(fmt.Sprintf("%s [%s] %s\n", icon, issue.Category, issue.Description))
-			if issue.Location != "" {
-				sb.WriteString(fmt.Sprintf("   📍 %s\n", issue.Location))
+		grouped := groupIssuesByCategory(criticalIssues)
+		categoryOrder := []string{"SECURITY", "BREAKING", "ARCHITECTURE", "PERFORMANCE"}
+		rendered := map[string]bool{}
+
+		for _, cat := range categoryOrder {
+			if issues, ok := grouped[cat]; ok {
+				f.renderCategoryBlock(&sb, cat, issues)
+				rendered[cat] = true
 			}
 		}
-		sb.WriteString("\n")
+		for cat, issues := range grouped {
+			if !rendered[cat] {
+				f.renderCategoryBlock(&sb, cat, issues)
+			}
+		}
+
+		sb.WriteString("────────────────────────────────────────────────────────────\n\n")
 	} else {
 		sb.WriteString("✅ No critical issues found.\n\n")
 	}
@@ -165,11 +171,15 @@ func (f *Formatter) FormatText(report *ReviewReport) string {
 
 	// Suggestions
 	if len(report.Suggestions) > 0 {
-		sb.WriteString("💡 SUGGESTIONS\n")
-		for _, sug := range report.Suggestions {
-			sb.WriteString(fmt.Sprintf("• %s\n", sug))
+		sb.WriteString(fmt.Sprintf("💡 SUGGESTIONS (%d)\n", len(report.Suggestions)))
+		sb.WriteString("────────────────────────────────────────────────────────────\n\n")
+		for i, sug := range report.Suggestions {
+			numPrefix := fmt.Sprintf("  %d. ", i+1)
+			indent := strings.Repeat(" ", len(numPrefix))
+			wrapped := wrapText(sug, 54, indent)
+			sb.WriteString(numPrefix + wrapped + "\n\n")
 		}
-		sb.WriteString("\n")
+		sb.WriteString("────────────────────────────────────────────────────────────\n\n")
 	}
 
 	// Unnecessary Complexity
@@ -254,6 +264,14 @@ func (f *Formatter) FormatText(report *ReviewReport) string {
 
 	// AI-Generated Code Analysis
 	f.formatAIAnalysis(&sb, report)
+
+	// Fix Prompt
+	if report.FixPrompt != "" {
+		sb.WriteString("\n🔧 FIX PROMPT (copy and paste into Cursor / AI assistant)\n")
+		sb.WriteString("────────────────────────────────────────────────────────────\n")
+		sb.WriteString(report.FixPrompt)
+		sb.WriteString("────────────────────────────────────────────────────────────\n\n")
+	}
 
 	return sb.String()
 }
@@ -347,4 +365,91 @@ func pluralize(count int) string {
 		return ""
 	}
 	return "s"
+}
+
+// wrapText wraps text at word boundaries to fit within width columns.
+// Continuation lines are prefixed with indent.
+func wrapText(text string, width int, indent string) string {
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return ""
+	}
+	var lines []string
+	currentLine := ""
+	for _, word := range words {
+		if currentLine == "" {
+			currentLine = word
+		} else if len(currentLine)+1+len(word) <= width {
+			currentLine += " " + word
+		} else {
+			lines = append(lines, currentLine)
+			currentLine = word
+		}
+	}
+	if currentLine != "" {
+		lines = append(lines, currentLine)
+	}
+	result := lines[0]
+	for _, line := range lines[1:] {
+		result += "\n" + indent + line
+	}
+	return result
+}
+
+// groupIssuesByCategory buckets issues by their Category field.
+func groupIssuesByCategory(issues []ReviewIssue) map[string][]ReviewIssue {
+	grouped := make(map[string][]ReviewIssue)
+	for _, issue := range issues {
+		cat := strings.ToUpper(issue.Category)
+		if cat == "" {
+			cat = "GENERAL"
+		}
+		grouped[cat] = append(grouped[cat], issue)
+	}
+	return grouped
+}
+
+// categoryColor returns the ANSI color code for a category header.
+func categoryColor(category string) string {
+	switch category {
+	case "SECURITY":
+		return "\033[1;31m" // bold red
+	case "BREAKING":
+		return "\033[1;35m" // bold magenta
+	case "ARCHITECTURE":
+		return "\033[1;33m" // bold yellow
+	case "PERFORMANCE":
+		return "\033[1;33m" // bold yellow
+	default:
+		return "\033[1;37m" // bold white
+	}
+}
+
+// categoryIcon returns the severity icon for a category.
+func categoryIcon(category string) string {
+	switch category {
+	case "SECURITY", "BREAKING":
+		return "🔴"
+	default:
+		return "🟡"
+	}
+}
+
+// renderCategoryBlock writes a grouped category block of issues to sb.
+func (f *Formatter) renderCategoryBlock(sb *strings.Builder, category string, issues []ReviewIssue) {
+	color := categoryColor(category)
+	reset := "\033[0m"
+	icon := categoryIcon(category)
+
+	sb.WriteString(fmt.Sprintf("\n  %s %s%s%s (%d)\n\n", icon, color, category, reset, len(issues)))
+	for i, issue := range issues {
+		numPrefix := fmt.Sprintf("     %d. ", i+1)
+		indent := strings.Repeat(" ", len(numPrefix))
+		wrapped := wrapText(issue.Description, 52, indent)
+		sb.WriteString(numPrefix + wrapped + "\n")
+		if issue.Location != "" {
+			sb.WriteString(indent + "📍 " + issue.Location + "\n")
+		}
+		sb.WriteString("\n")
+	}
 }

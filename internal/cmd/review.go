@@ -36,11 +36,13 @@ Examples:
 
 var (
 	// Review flags
-	ciMode       bool
-	outputFormat string
-	outputFile   string
-	generateHTML bool
-	generateGFM  bool
+	ciMode        bool
+	outputFormat  string
+	outputFile    string
+	generateHTML  bool
+	generateGFM   bool
+	aiDetect      bool
+	noFixPrompt   bool
 )
 
 func init() {
@@ -56,6 +58,8 @@ func init() {
 	reviewCmd.PersistentFlags().StringVar(&outputFile, "output-file", "", "write output to file")
 	reviewCmd.PersistentFlags().BoolVar(&generateHTML, "html", false, "generate HTML report (overrides config setting)")
 	reviewCmd.PersistentFlags().BoolVar(&generateGFM, "gfm", false, "generate GitHub Flavored Markdown report (overrides config setting)")
+	reviewCmd.PersistentFlags().BoolVar(&aiDetect, "ai-detect", false, "enable AI-generated code detection (off by default)")
+	reviewCmd.PersistentFlags().BoolVar(&noFixPrompt, "no-fix-prompt", false, "disable fix prompt generation")
 }
 
 // reviewLatestCmd reviews the latest commit
@@ -202,6 +206,13 @@ func runReviewLatest() error {
 		cfg.Review.GenerateGFM = true
 	}
 
+	if aiDetect {
+		cfg.Review.DetectAICode = true
+	}
+	if noFixPrompt {
+		cfg.Review.GenerateFixPrompt = false
+	}
+
 	// Initialize legacy reviewer (used by Engine)
 	baseReviewer := review.NewReviewer(repo.RootPath, cfg)
 	
@@ -298,6 +309,13 @@ func runReviewDiff(diffRange string) error {
 		cfg.Review.GenerateGFM = true
 	}
 
+	if aiDetect {
+		cfg.Review.DetectAICode = true
+	}
+	if noFixPrompt {
+		cfg.Review.GenerateFixPrompt = false
+	}
+
 	// Initialize legacy reviewer (used by Engine)
 	baseReviewer := review.NewReviewer(repo.RootPath, cfg)
 	
@@ -388,6 +406,13 @@ func runReviewFull() error {
 	// Override GFM generation if flag is set
 	if generateGFM {
 		cfg.Review.GenerateGFM = true
+	}
+
+	if aiDetect {
+		cfg.Review.DetectAICode = true
+	}
+	if noFixPrompt {
+		cfg.Review.GenerateFixPrompt = false
 	}
 
 	// Initialize legacy reviewer (used by Engine)

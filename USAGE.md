@@ -311,8 +311,10 @@ katich review latest
 
 **Flags:**
 ```bash
-katich review latest --html   # Force HTML report generation
-katich review latest --gfm    # Generate a GitHub Flavored Markdown report
+katich review latest --html            # Force HTML report generation
+katich review latest --gfm             # Generate a GitHub Flavored Markdown report
+katich review latest --ai-detect       # Enable AI-generated code detection
+katich review latest --no-fix-prompt   # Disable fix prompt generation
 ```
 
 **What it does:**
@@ -321,6 +323,7 @@ katich review latest --gfm    # Generate a GitHub Flavored Markdown report
 - Generates comprehensive review report
 - Creates HTML report (if `review.generate_html: true` or `--html` flag)
 - Creates GFM report (if `review.generate_gfm: true` or `--gfm` flag)
+- Generates a fix prompt (unless `--no-fix-prompt` is passed)
 
 **Example Output:**
 ```
@@ -805,7 +808,42 @@ analysis:
     skip_tests: false  # Set to true to exclude test files
 ```
 
-### 7. Security Focus
+### 7. Long Function Findings
+
+Function-length / line-count concerns (e.g. "function is too long") are treated as **Static Analysis (informational)** only. They do **not** appear in Critical Issues or Suggestions. Katich focuses those sections exclusively on security vulnerabilities, architectural violations, performance regressions, and breaking changes.
+
+### 8. Fix Prompt
+
+After every review, Katich generates a **fix prompt** — a structured, copy-pasteable block that you can paste directly into Cursor, Antigravity, Copilot, or any AI coding assistant. It includes all critical issues grouped by priority and a safety footer reminding the assistant not to break functionality.
+
+The fix prompt appears in:
+- **Console output** (at the end of the report)
+- **GFM report** (inside a collapsible `<details>` block)
+- **HTML report** (collapsible section with a "Copy" button)
+
+This is **enabled by default**. To disable:
+```bash
+katich review latest --no-fix-prompt
+```
+Or in config:
+```yaml
+review:
+  generate_fix_prompt: false
+```
+
+### 9. AI-Generated Code Detection
+
+AI-generated code detection is **disabled by default**. Since most code now involves AI assistance, this section is opt-in to avoid noise. To enable:
+```bash
+katich review latest --ai-detect
+```
+Or in config:
+```yaml
+review:
+  detect_ai_code: true
+```
+
+### 10. Security Focus
 
 The tool automatically focuses on security vulnerabilities. Ensure your API key has access to models that support security analysis (e.g., GPT-4, Claude 3.5 Sonnet).
 

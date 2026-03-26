@@ -3,6 +3,7 @@ package review
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/katichai/katich/internal/analysis"
@@ -24,6 +25,7 @@ type ReviewReport struct {
 	SimilarityCheckLimited bool                            `json:"similarity_check_limited,omitempty"`
 	SimilarityCheckReason  string                          `json:"similarity_check_reason,omitempty"`
 	DBQueryReviews        []DBQueryReview                  `json:"db_query_reviews,omitempty"`
+	FixPrompt             string                          `json:"fix_prompt,omitempty"`
 }
 
 // ComplexityIssue represents an unnecessarily complex code block or architectural pattern
@@ -161,7 +163,10 @@ func (s *Synthesizer) Synthesize(llmOutput string, staticIssues []analysis.Issue
 	// 5. Deduplicate complexity issues
 	s.deduplicateComplexityIssues(report)
 
-	// 6. Final adjustments (commented out - scoring is subjective)
+	// 6. Sort issues by priority: SECURITY > BREAKING > ARCHITECTURE > PERFORMANCE > others
+	s.sortIssuesByPriority(report)
+
+	// 7. Final adjustments (commented out - scoring is subjective)
 	// if report.Score < 0 {
 	// 	report.Score = 0
 	// }
@@ -535,11 +540,34 @@ func (s *Synthesizer) parseLLMOutput(output string, report *ReviewReport) {
 	suggestionsRe := regexp.MustCompile(`(?s)## Suggestions.*?\n(.*?)(##|$)`)
 	if match := suggestionsRe.FindStringSubmatch(output); len(match) > 1 {
 		lines := strings.Split(match[1], "\n")
+		var pending string
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "-") {
-				report.Suggestions = append(report.Suggestions, strings.TrimPrefix(line, "- "))
+			if !strings.HasPrefix(line, "-") {
+				// Continuation line: append to the last suggestion if any
+				if line != "" && len(report.Suggestions) > 0 {
+					report.Suggestions[len(report.Suggestions)-1] += " " + line
+				}
+				continue
 			}
+			item := strings.TrimSpace(strings.TrimPrefix(line, "-"))
+			// Detect heading-only lines like "**Refactor Complex Functions:**"
+			// These end with ":" or ":**" and contain mostly bold markers
+			stripped := strings.ReplaceAll(item, "*", "")
+			stripped = strings.TrimSpace(stripped)
+			if strings.HasSuffix(stripped, ":") && len(stripped) < 80 {
+				// This is a heading — hold it and merge with the next item
+				pending = stripped + " "
+				continue
+			}
+			// Strip bold markers from the item itself
+			item = strings.ReplaceAll(item, "**", "")
+			report.Suggestions = append(report.Suggestions, pending+item)
+			pending = ""
+		}
+		// If a heading was the last line with no following content
+		if pending != "" {
+			report.Suggestions = append(report.Suggestions, strings.TrimSuffix(pending, " "))
 		}
 	}
 	
@@ -682,6 +710,125 @@ func (s *Synthesizer) tryExtractIssuesFromSummary(summary string, report *Review
 	}
 	
 	return false
+}
+
+// issueCategoryPriority returns a sort priority for a ReviewIssue category.
+// Lower number = higher priority (shown first).
+func issueCategoryPriority(category string) int {
+	switch strings.ToUpper(category) {
+	case "SECURITY":
+		return 0
+	case "BREAKING":
+		return 1
+	case "ARCHITECTURE":
+		return 2
+	case "PERFORMANCE":
+		return 3
+	case "STATIC_ANALYSIS":
+		return 5
+	default:
+		return 4
+	}
+}
+
+// sortIssuesByPriority sorts report.Issues so that higher-priority categories come first.
+// Within the same category the original LLM ordering is preserved (stable sort).
+func (s *Synthesizer) sortIssuesByPriority(report *ReviewReport) {
+	sort.SliceStable(report.Issues, func(i, j int) bool {
+		return issueCategoryPriority(report.Issues[i].Category) <
+			issueCategoryPriority(report.Issues[j].Category)
+	})
+}
+
+// BuildFixPrompt generates a lean, prescriptive prompt that users can paste
+// into Cursor, Antigravity, or any AI coding assistant to fix review findings.
+func (s *Synthesizer) BuildFixPrompt(report *ReviewReport) string {
+	var sb strings.Builder
+
+	sb.WriteString("Fix the following issues found during code review.\n\n")
+
+	// Collect non-STATIC_ANALYSIS issues grouped by category in priority order
+	type catEntry struct {
+		key   string
+		label string
+	}
+	categoryOrder := []catEntry{
+		{"SECURITY", "Security"},
+		{"BREAKING", "Breaking Changes"},
+		{"ARCHITECTURE", "Architecture"},
+		{"PERFORMANCE", "Performance"},
+	}
+
+	grouped := make(map[string][]ReviewIssue)
+	for _, issue := range report.Issues {
+		cat := strings.ToUpper(issue.Category)
+		if cat == "STATIC_ANALYSIS" {
+			continue
+		}
+		if cat == "" {
+			cat = "GENERAL"
+		}
+		grouped[cat] = append(grouped[cat], issue)
+	}
+
+	rendered := map[string]bool{}
+	issueNum := 1
+
+	for _, entry := range categoryOrder {
+		issues := grouped[entry.key]
+		if len(issues) == 0 {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("[%s]\n", entry.label))
+		for _, issue := range issues {
+			sb.WriteString(s.formatFixInstruction(issueNum, issue))
+			issueNum++
+		}
+		sb.WriteString("\n")
+		rendered[entry.key] = true
+	}
+
+	for cat, issues := range grouped {
+		if rendered[cat] {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("[%s]\n", cat))
+		for _, issue := range issues {
+			sb.WriteString(s.formatFixInstruction(issueNum, issue))
+			issueNum++
+		}
+		sb.WriteString("\n")
+	}
+
+	// Suggestions as actionable items
+	if len(report.Suggestions) > 0 {
+		sb.WriteString("[Suggestions]\n")
+		for _, sug := range report.Suggestions {
+			sb.WriteString(fmt.Sprintf("%d. %s\n", issueNum, sug))
+			issueNum++
+		}
+		sb.WriteString("\n")
+	}
+
+	// Safety guardrails — always appended
+	sb.WriteString("Constraints:\n")
+	sb.WriteString("- Do not break any existing functionality or tests.\n")
+	sb.WriteString("- Do not remove or rename public APIs without user approval.\n")
+	sb.WriteString("- Preserve existing coding patterns and directory structure.\n")
+	sb.WriteString("- If a fix requires a significant refactor, ask the user before proceeding.\n")
+	sb.WriteString("- Run the test suite after changes to verify nothing is broken.\n")
+	sb.WriteString("- If unsure about a fix, explain trade-offs and let the user decide.\n")
+
+	return sb.String()
+}
+
+// formatFixInstruction turns a ReviewIssue into a prescriptive instruction.
+func (s *Synthesizer) formatFixInstruction(num int, issue ReviewIssue) string {
+	loc := ""
+	if issue.Location != "" {
+		loc = " at " + issue.Location
+	}
+	return fmt.Sprintf("%d. Fix%s: %s\n", num, loc, issue.Description)
 }
 
 func (s *Synthesizer) deduplicateSecurityIssues(report *ReviewReport) {

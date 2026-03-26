@@ -80,10 +80,12 @@ type APIServerConfig struct {
 
 // ReviewConfig contains review output settings
 type ReviewConfig struct {
-	GenerateHTML  bool   `yaml:"generate_html"`  // whether to generate HTML reports
-	HTMLOutputPath string `yaml:"html_output_path,omitempty"` // output path for HTML reports (default: .katich/reports)
-	GenerateGFM  bool   `yaml:"generate_gfm"`  // whether to generate GFM reports
-	GFMOutputPath string `yaml:"gfm_output_path,omitempty"` // output path for GFM reports (default: .katich/reports)
+	GenerateHTML      bool   `yaml:"generate_html"`               // whether to generate HTML reports
+	HTMLOutputPath    string `yaml:"html_output_path,omitempty"`   // output path for HTML reports (default: .katich/reports)
+	GenerateGFM       bool   `yaml:"generate_gfm"`                // whether to generate GFM reports
+	GFMOutputPath     string `yaml:"gfm_output_path,omitempty"`   // output path for GFM reports (default: .katich/reports)
+	DetectAICode      bool   `yaml:"detect_ai_code"`              // run AI-generated code detection (default: false)
+	GenerateFixPrompt bool   `yaml:"generate_fix_prompt"`         // generate a fix prompt for AI assistants (default: true)
 }
 
 // DefaultConfig returns a configuration with sensible defaults
@@ -119,10 +121,12 @@ func DefaultConfig() *Config {
 			Enabled: false,
 		},
 		Review: ReviewConfig{
-			GenerateHTML:   true,  // Default to true for HTML reports
-			HTMLOutputPath: ".katich/reports",
-			GenerateGFM:    false, // Default to false for GFM reports
-			GFMOutputPath:  ".katich/reports",
+			GenerateHTML:      true,  // Default to true for HTML reports
+			HTMLOutputPath:    ".katich/reports",
+			GenerateGFM:       false, // Default to false for GFM reports
+			GFMOutputPath:     ".katich/reports",
+			DetectAICode:      false, // AI detection is opt-in
+			GenerateFixPrompt: true,  // Fix prompt is on by default
 		},
 		Context: ContextConfig{
 			Source: "local",
