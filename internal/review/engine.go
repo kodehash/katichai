@@ -711,7 +711,7 @@ func (e *ReviewEngine) ReviewFullRepository(diff *git.Diff) (*ReviewReport, erro
 
 	// Sample the repository using intelligent sampling
 	fmt.Println("   ⏳ Initializing repository sampler...")
-	sampler := NewRepositorySampler(diffBudget)
+	sampler := NewRepositorySampler(diffBudget, e.config.Analysis.Sampling.MaxFiles)
 	fmt.Printf("   ✓ Sampler initialized (token budget: %d)\n", diffBudget)
 	
 	// Adjust sampling for very large repositories

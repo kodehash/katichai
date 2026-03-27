@@ -20,31 +20,33 @@ type RepositorySampler struct {
 	skipTests     bool
 }
 
-// NewRepositorySampler creates a new repository sampler with a token budget
-func NewRepositorySampler(maxTokens int) *RepositorySampler {
+// NewRepositorySampler creates a new repository sampler with a token budget and file cap.
+// maxFiles controls the upper limit of files selected for review (default: 30).
+func NewRepositorySampler(maxTokens int, maxFiles int) *RepositorySampler {
+	if maxFiles <= 0 {
+		maxFiles = 30
+	}
 	return &RepositorySampler{
 		maxTokens:     maxTokens,
-		maxFiles:      MAX_FILES_FULL_REVIEW,
+		maxFiles:      maxFiles,
 		contextLines:  MAX_CONTEXT_LINES,
 		skipGenerated: true,
 		skipTests:     false,
 	}
 }
 
-// AdjustForLargeRepository reduces max files for very large repositories
-// Note: Lines of code is not a problem, only number of files matters
+// AdjustForLargeRepository logs the effective sampling plan for large repositories.
 func (s *RepositorySampler) AdjustForLargeRepository(totalFiles int) {
-	// For >15 files, we use percentage-based sampling (30% of filtered files, min 15, max 30)
 	if totalFiles > 15 {
 		percentage := float64(totalFiles) * 0.3
 		estimatedFiles := int(percentage)
 		if estimatedFiles < 15 {
 			estimatedFiles = 15
 		}
-		if estimatedFiles > 30 {
-			estimatedFiles = 30
+		if estimatedFiles > s.maxFiles {
+			estimatedFiles = s.maxFiles
 		}
-		fmt.Printf("  📦 Large repository detected (%d files). Processing up to %d files (30%% of important files, max 30).\n", totalFiles, estimatedFiles)
+		fmt.Printf("  📦 Large repository detected (%d files). Processing up to %d files (30%% of important files, max %d).\n", totalFiles, estimatedFiles, s.maxFiles)
 	}
 }
 
@@ -434,25 +436,28 @@ func hasDatabaseOrORMCalls(analysis *analysispkg.FileAnalysis) bool {
 	return false
 }
 
-// selectFiles selects files based on percentage of total, with min/max constraints
+// selectFiles selects files based on percentage of total, capped by s.maxFiles.
 func (s *RepositorySampler) selectFiles(risks []FileRisk) []FileRisk {
 	totalFiltered := len(risks)
-	
-	// If 15 or fewer files, include all
+
+	// If 15 or fewer files, include all (up to the user-defined cap)
 	if totalFiltered <= 15 {
+		if totalFiltered > s.maxFiles {
+			return risks[:s.maxFiles]
+		}
 		return risks
 	}
-	
-	// For >15 files: min 15, max 30% of total, final cap at 30
+
+	// For >15 files: 30% of total, minimum 15, capped at s.maxFiles
 	percentage := float64(totalFiltered) * 0.3
 	maxFiles := int(percentage)
 	if maxFiles < 15 {
-		maxFiles = 15 // Minimum guarantee
+		maxFiles = 15
 	}
-	if maxFiles > 30 {
-		maxFiles = 30 // Final absolute maximum cap
+	if maxFiles > s.maxFiles {
+		maxFiles = s.maxFiles
 	}
-	
+
 	return risks[:maxFiles]
 }
 

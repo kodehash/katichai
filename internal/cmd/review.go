@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/katichai/katich/internal/config"
@@ -447,7 +448,29 @@ func runReviewFull() error {
 			return nil
 		}
 	}
-	
+
+	// Ask user how many files to review
+	fmt.Println()
+	fmt.Println("How many files should Katich review?")
+	fmt.Println("  • More files = more token consumption.")
+	fmt.Println("  • Katich AI smartly identifies the most important files based on the count you provide.")
+	fmt.Println("  • Ideal count is 30.")
+	fmt.Print("Number of files [default: 30]: ")
+
+	maxFiles := 30
+	if scanner.Scan() {
+		input := strings.TrimSpace(scanner.Text())
+		if input != "" {
+			if n, err := strconv.Atoi(input); err == nil && n > 0 {
+				maxFiles = n
+			} else {
+				fmt.Println("  ⚠️  Invalid input, using default: 30")
+			}
+		}
+	}
+	cfg.Analysis.Sampling.MaxFiles = maxFiles
+	fmt.Printf("  ✔ Will review up to %d files.\n", maxFiles)
+
 	fmt.Println()
 
 	// Run comprehensive full repository review

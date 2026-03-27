@@ -262,6 +262,21 @@ Comprehensive review of the entire repository. Uses intelligent sampling for lar
 katich review full
 ```
 
+When you run this command, Katich will ask two questions before starting:
+
+1. **Confirmation** — A warning about token consumption, asking `Still want to continue? (y/N)`
+2. **File count** — How many files to include in the review:
+
+```
+How many files should Katich review?
+  • More files = more token consumption.
+  • Katich AI smartly identifies the most important files based on the count you provide.
+  • Ideal count is 30.
+Number of files [default: 30]:
+```
+
+Press Enter to accept the default of 30, or type any positive integer. Katich will always pick the **most important files** (highest risk score) up to the count you specify.
+
 Best for:
 - Initial codebase audits
 - Pre-release comprehensive reviews

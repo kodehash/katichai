@@ -6,7 +6,7 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Project identifier (optional). Often auto-set from Git remote during `katich init`.
-# Used by API server to return the right API key when api_server.enabled is true.
+# Used by the API server (if enabled) to return the correct API key for this repo.
 # project_name: my-project
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -16,7 +16,8 @@ llm:
   # Provider: openai | anthropic | ollama (local)
   provider: openai
 
-  # API key. Prefer env vars in CI: OPENAI_API_KEY, ANTHROPIC_API_KEY, or KATICH_LLM_API_KEY
+  # API key.
+  # Prefer env vars in CI: OPENAI_API_KEY, ANTHROPIC_API_KEY, or KATICH_LLM_API_KEY
   api_key: ""
 
   # Model name. Examples: gpt-4o, gpt-4, claude-3-5-sonnet-20241022, llama3, llama3.1
@@ -36,17 +37,21 @@ llm:
 # ─────────────────────────────────────────────────────────────────────────────
 # Embeddings (semantic similarity and context)
 # ─────────────────────────────────────────────────────────────────────────────
-# Embeddings use a hybrid provider: Ollama (nomic-embed-text) if available,
-# otherwise OpenAI (text-embedding-3-small). No need to set provider/model unless
-# you rely on the defaults. For API embeddings, set api_key (or OPENAI_API_KEY).
 embeddings:
-  # Model name (e.g. jina-code-v2 for local, text-embedding-3-small for API)
+  # Model name:
+  # - local: jina-code-v2, nomic-embed-text, bge-code, etc.
+  # - api:   text-embedding-3-small (OpenAI)
   model: text-embedding-3-small
 
-  # Provider: local | api. "local" prefers Ollama when running; "api" uses OpenAI.
+  # Provider: local | api
+  # - local: uses a local embeddings model (typically via Ollama)
+  # - api:   uses OpenAI embeddings API
   provider: api
 
-  # Required when provider is api. Can use OPENAI_API_KEY or KATICH_EMBEDDINGS_API_KEY
+  # Required when provider is api.
+  # Environment overrides:
+  # - KATICH_EMBEDDINGS_API_KEY (preferred)
+  # - OPENAI_API_KEY (fallback)
   api_key: ""
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -100,7 +105,11 @@ analysis:
 
   sampling:
     enabled: true
-    max_files: 50
+    # Max files to review per run. For `katich review full`, this is the upper cap — Katich
+    # will pick the most important files (by risk score) up to this number.
+    # The user is also prompted interactively at runtime to override this.
+    # More files = more token consumption. Ideal for full reviews: 30.
+    max_files: 30
     context_lines: 2
     skip_generated: true
     skip_tests: false
@@ -109,9 +118,13 @@ analysis:
 # ─────────────────────────────────────────────────────────────────────────────
 # Centralized API server (optional)
 # ─────────────────────────────────────────────────────────────────────────────
-# When enabled, LLM api_key is fetched from your server instead of config.
-# Set KATICH_API_SERVER_URL and KATICH_API_TOKEN (or use config below).
-# api_server:
-#   enabled: true
-#   url: https://api.example.com/api/v1/keys
-#   token: ""
+# When enabled, the LLM api_key is fetched from your server instead of config.
+# Recommended to use environment variables in CI:
+# - KATICH_API_SERVER_URL (required when enabled)
+# - KATICH_API_TOKEN (required when enabled; overrides token below)
+api_server:
+  enabled: false
+  # url can be set here or via KATICH_API_SERVER_URL (env var wins)
+  url: ""
+  # token can be set here or via KATICH_API_TOKEN (env var wins)
+  token: ""
