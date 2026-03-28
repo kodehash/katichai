@@ -95,6 +95,42 @@ katich review diff main..feature [--html] [--gfm] [--ai-detect] [--no-fix-prompt
 katich review full [--html] [--gfm] [--ai-detect] [--no-fix-prompt]
 katich doctor
 katich version
+katich mcp   # Model Context Protocol server (stdio); see below
+```
+
+## Model Context Protocol (MCP)
+
+Katich can run as an **MCP server** over stdio so IDEs and agents (Cursor, Claude Code, Codex, MCP Inspector) can call review, context, and doctor as tools.
+
+```bash
+katich mcp
+```
+
+Exposed tools include `katich_review_latest`, `katich_review_diff`, `katich_review_full`, `katich_context_build`, `katich_doctor`, and `katich_version`. Review tools need a configured LLM (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` or `.katich/config.yaml`) in the environment of the MCP process.
+
+**Example MCP client config** (project `.mcp.json` or client-specific MCP settings):
+
+```json
+{
+  "mcpServers": {
+    "katich": {
+      "command": "/usr/local/bin/katich",
+      "args": ["mcp"],
+      "env": {
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+Use the absolute path to your `katich` binary (for example after `go build -o katich cmd/katich/main.go` in this repo). Start the client from a **git checkout** directory so review/context commands resolve the correct repository.
+
+**Tests**
+
+```bash
+go test ./internal/mcp/ -v
+go test ./internal/mcp/ -tags integration -v -timeout 120s   # needs git + optional API keys; see integration_test.go
 ```
 
 ## Review Flags (Most Used)
