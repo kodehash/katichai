@@ -140,12 +140,37 @@ llm:
   api_key: "sk-ant-..."
 ```
 
+**DeepSeek:**
+```yaml
+llm:
+  provider: deepseek
+  model: deepseek-chat       # or deepseek-reasoner
+  api_key: "sk-..."          # or set DEEPSEEK_API_KEY
+```
+
+**Qwen (Alibaba DashScope):**
+```yaml
+llm:
+  provider: qwen
+  model: qwen-plus           # or qwen-turbo, qwen-max
+  api_key: "sk-..."          # or set DASHSCOPE_API_KEY
+```
+
 **Ollama** (local, free, private):
 ```yaml
 llm:
   provider: ollama
   model: llama3
   base_url: http://localhost:11434
+```
+
+**OpenAI-compatible proxy / self-hosted** (Azure OpenAI, LiteLLM, Groq, etc.):
+```yaml
+llm:
+  provider: openai
+  model: your-model-name
+  api_key: "sk-..."
+  base_url: https://your-proxy.example.com/v1/chat/completions
 ```
 
 > **Note:** Anthropic does not support embeddings. When using Anthropic as LLM provider, use OpenAI or Ollama for embeddings.
@@ -170,12 +195,14 @@ embeddings:
 
 All API keys can be set via environment variables instead of (or in addition to) the config file. Environment variables take precedence.
 
-| Variable | Purpose |
-|----------|---------|
-| `OPENAI_API_KEY` | OpenAI API key (LLM and embeddings) |
-| `ANTHROPIC_API_KEY` | Anthropic API key |
-| `KATICH_LLM_API_KEY` | Override LLM API key for any provider |
-| `KATICH_EMBEDDINGS_API_KEY` | Override embeddings API key |
+| Variable | Provider | Purpose |
+|----------|----------|---------|
+| `OPENAI_API_KEY` | `openai` | OpenAI API key (LLM and embeddings) |
+| `ANTHROPIC_API_KEY` | `anthropic` | Anthropic API key |
+| `DEEPSEEK_API_KEY` | `deepseek` | DeepSeek API key |
+| `DASHSCOPE_API_KEY` | `qwen` | Alibaba DashScope key (used by Qwen models) |
+| `KATICH_LLM_API_KEY` | any | Override LLM API key for any provider |
+| `KATICH_EMBEDDINGS_API_KEY` | any | Override embeddings API key |
 
 ---
 
@@ -575,7 +602,12 @@ analysis:
 ### "failed to fetch API key"
 
 - Check that `llm.api_key` is set in `.katich/config.yaml`
-- Or set `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` environment variable
+- Or set the provider-specific env var:
+  - `OPENAI_API_KEY` for `provider: openai`
+  - `ANTHROPIC_API_KEY` for `provider: anthropic`
+  - `DEEPSEEK_API_KEY` for `provider: deepseek`
+  - `DASHSCOPE_API_KEY` for `provider: qwen`
+  - `KATICH_LLM_API_KEY` works for any provider
 - If using API server: ensure `api_server.enabled: true` and URL/token are correct
 
 ### "Not in a Git repository"
