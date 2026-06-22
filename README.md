@@ -257,6 +257,12 @@ Fix the following issues found during code review.
 ────────────────────────────────────────────────────────────
 ```
 
+## Security and sensitive files
+
+- Katich does **not** read `.env` or other dotenv files from your repository to load configuration. It uses `.katich/config.yaml` and normal process environment variables (for example `OPENAI_API_KEY`).
+- Paths that match common secret and credential patterns are **excluded** from context scanning, analysis, embedding inputs, git diff patch loading, full-repository review synthesis, and report file reads. The rules are implemented in [`internal/safepath`](internal/safepath/safepath.go) and include examples such as: `.env` and `.env.*`, `*.env` and `*.env.*`, private-key style names (`id_rsa`, `id_ed25519`, …), extensions like `.pem` / `.key` / `.p12` / `.pfx` / `.kdbx`, `.npmrc`, `.pypirc`, `secrets.json`, credential filenames (`credentials`, `credentials.json`, …), `.aws/credentials`, `application_default_credentials.json`, and paths under `.ssh/`.
+- This is **filename/path heuristics only**. Secrets stored under unrelated names (for example a random `.ts` file) are not detectable here—follow the usual practice of never committing secrets.
+
 ## Supported LLM Providers
 
 | Provider | Models | Env var | Notes |

@@ -9,6 +9,7 @@ import (
 	analysispkg "github.com/katichai/katich/internal/analysis"
 	"github.com/katichai/katich/internal/git"
 	"github.com/katichai/katich/internal/llm"
+	"github.com/katichai/katich/internal/safepath"
 )
 
 // Token budget constants
@@ -200,7 +201,12 @@ func (s *DiffSampler) filterNoise(files []*git.DiffFile, report *SamplingReport)
 			report.FilteredReasons["hidden"]++
 			continue
 		}
-		
+
+		if safepath.IsBlockedPath(file.Path) {
+			report.FilteredReasons["sensitive"]++
+			continue
+		}
+
 		// Check if generated
 		if s.skipGenerated && isGeneratedFile(file.Path) {
 			report.FilteredReasons["generated"]++

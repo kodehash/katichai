@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/katichai/katich/internal/safepath"
 )
 
 // Detector detects frameworks and languages in a repository
@@ -87,9 +89,12 @@ func (d *Detector) scanRepository() ([]string, error) {
 			return nil
 		}
 
-		// Only include source files
+		// Only include source files (exclude secrets / env paths)
 		if IsSourceFile(path) {
 			relPath, _ := filepath.Rel(d.rootPath, path)
+			if safepath.IsBlockedPath(relPath) {
+				return nil
+			}
 			files = append(files, relPath)
 		}
 

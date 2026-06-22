@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/katichai/katich/internal/context"
+	"github.com/katichai/katich/internal/safepath"
 )
 
 // Analyzer performs static analysis on code files
@@ -74,15 +75,18 @@ func (a *Analyzer) AnalyzeRepository() (*AnalysisResult, error) {
 			return nil
 		}
 
-		// Analyze source files
+		// Analyze source files (skip secret / env paths)
 		if a.isSourceFile(path) {
+			relPath, _ := filepath.Rel(a.rootPath, path)
+			if safepath.IsBlockedPath(relPath) {
+				return nil
+			}
 			analysis, err := a.analyzeFile(path)
 			if err != nil {
 				// Log error but continue
 				return nil
 			}
 
-			relPath, _ := filepath.Rel(a.rootPath, path)
 			result.Files[relPath] = analysis
 
 			// Aggregate metrics
@@ -308,6 +312,9 @@ func (a *Analyzer) AnalyzeChangedFiles(changedFiles []string) (map[string]*FileA
 	// Filter source files first
 	sourceFiles := make([]string, 0)
 	for _, file := range changedFiles {
+		if safepath.IsBlockedPath(file) {
+			continue
+		}
 		fullPath := filepath.Join(a.rootPath, file)
 		if a.isSourceFile(fullPath) {
 			sourceFiles = append(sourceFiles, file)
