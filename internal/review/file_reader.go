@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/katichai/katich/internal/safepath"
 )
 
 // FileReader reads file contents for HTML rendering
@@ -22,6 +24,10 @@ func NewFileReader(repoRoot string) *FileReader {
 
 // ReadFile reads the content of a file, resolving paths relative to repo root
 func (fr *FileReader) ReadFile(filePath string) (string, error) {
+	if safepath.IsBlockedPath(filePath) {
+		return "", fmt.Errorf("refusing to read sensitive path: %s", filePath)
+	}
+
 	// Check cache first
 	if content, exists := fr.cache[filePath]; exists {
 		return content, nil

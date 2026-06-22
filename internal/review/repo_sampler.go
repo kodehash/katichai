@@ -9,6 +9,7 @@ import (
 	analysispkg "github.com/katichai/katich/internal/analysis"
 	"github.com/katichai/katich/internal/git"
 	"github.com/katichai/katich/internal/llm"
+	"github.com/katichai/katich/internal/safepath"
 )
 
 // RepositorySampler samples repository files intelligently for full repository reviews
@@ -211,6 +212,11 @@ func (s *RepositorySampler) filterNoise(files []*git.DiffFile, report *SamplingR
 		// Skip all hidden files and directories (starting with .)
 		if strings.HasPrefix(file.Path, ".") || strings.Contains(file.Path, "/.") {
 			report.FilteredReasons["hidden"]++
+			continue
+		}
+
+		if safepath.IsBlockedPath(file.Path) {
+			report.FilteredReasons["sensitive"]++
 			continue
 		}
 

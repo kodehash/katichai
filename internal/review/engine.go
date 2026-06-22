@@ -13,6 +13,7 @@ import (
 	"github.com/katichai/katich/internal/config"
 	"github.com/katichai/katich/internal/git"
 	"github.com/katichai/katich/internal/llm"
+	"github.com/katichai/katich/internal/safepath"
 )
 
 // ReviewEngine orchestrates the complete review pipeline
@@ -1570,6 +1571,9 @@ func (e *ReviewEngine) determineIgnoreReason(file *git.DiffFile) string {
 	}
 	if strings.HasPrefix(file.Path, ".") || strings.Contains(file.Path, "/.") {
 		return "hidden"
+	}
+	if safepath.IsBlockedPath(file.Path) {
+		return "sensitive"
 	}
 	if isGeneratedFile(file.Path) {
 		return "generated"

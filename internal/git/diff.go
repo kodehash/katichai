@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/katichai/katich/internal/safepath"
 )
 
 // DiffFile represents a file change in a diff
@@ -98,6 +100,10 @@ func (r *Repository) getDiffFiles(ref string) ([]*DiffFile, error) {
 			Path: parts[2],
 		}
 
+		if safepath.IsBlockedPath(file.Path) {
+			continue
+		}
+
 		// Parse additions/deletions
 		if parts[0] != "-" {
 			fmt.Sscanf(parts[0], "%d", &file.Additions)
@@ -149,6 +155,10 @@ func (r *Repository) getDiffFilesRange(rangeSpec string) ([]*DiffFile, error) {
 
 		file := &DiffFile{
 			Path: parts[2],
+		}
+
+		if safepath.IsBlockedPath(file.Path) {
+			continue
 		}
 
 		if parts[0] != "-" {
@@ -276,6 +286,9 @@ func (r *Repository) GetFullRepositoryDiff() (*Diff, error) {
 	diffFiles := make([]*DiffFile, 0, len(files))
 
 	for _, filePath := range files {
+		if safepath.IsBlockedPath(filePath) {
+			continue
+		}
 		// Read file content from working directory
 		fullPath := filepath.Join(r.RootPath, filePath)
 		content, err := os.ReadFile(fullPath)
