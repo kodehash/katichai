@@ -18,17 +18,21 @@ type OpenAIProvider struct {
 	baseURL string
 }
 
-// NewOpenAIProvider creates a new OpenAI provider
-func NewOpenAIProvider(apiKey string, model string) *OpenAIProvider {
+// NewOpenAIProvider creates a new OpenAI (or OpenAI-compatible) provider.
+// baseURL overrides the default OpenAI endpoint — pass an empty string to use the default.
+func NewOpenAIProvider(apiKey, model, baseURL string) *OpenAIProvider {
 	if model == "" {
 		model = "gpt-4o"
+	}
+	if baseURL == "" {
+		baseURL = "https://api.openai.com/v1/chat/completions"
 	}
 
 	return &OpenAIProvider{
 		apiKey:  apiKey,
 		model:   model,
-		client:  &http.Client{Timeout: 120 * time.Second}, // 2 minutes for reviews
-		baseURL: "https://api.openai.com/v1/chat/completions",
+		client:  &http.Client{Timeout: 120 * time.Second},
+		baseURL: baseURL,
 	}
 }
 

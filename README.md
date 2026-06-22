@@ -2,7 +2,7 @@
 
 **Context-aware, AI-powered code review from your terminal.**
 
-Katich AI reviews your code changes like a senior engineer — catching security vulnerabilities, architectural violations, duplicate logic, and unnecessary complexity. Works with OpenAI, Anthropic, or local Ollama models.
+Katich AI reviews your code changes like a senior engineer — catching security vulnerabilities, architectural violations, duplicate logic, and unnecessary complexity. Works with OpenAI, Anthropic, DeepSeek, Qwen, or local Ollama models.
 
 ## Key Features
 
@@ -116,9 +116,10 @@ Katich reads `.katich/config.yaml`. `katich init` generates it with defaults.
 
 ```yaml
 llm:
-  provider: openai        # openai | anthropic | ollama
+  provider: openai        # openai | anthropic | deepseek | qwen | ollama
   model: gpt-4o
-  api_key: "sk-..."       # or use OPENAI_API_KEY / ANTHROPIC_API_KEY
+  api_key: "sk-..."       # or use provider-specific env var (see below)
+  base_url: ""            # optional — override endpoint for any OpenAI-compatible API
   tokens_per_minute: 90000  # 0 = disable TPM pacing
 ```
 
@@ -258,11 +259,15 @@ Fix the following issues found during code review.
 
 ## Supported LLM Providers
 
-| Provider | Models | Notes |
-|----------|--------|-------|
-| **OpenAI** | gpt-4o, gpt-4, gpt-3.5-turbo | Recommended. Set `api_key` or `OPENAI_API_KEY` env var |
-| **Anthropic** | claude-3-5-sonnet, claude-3-opus | Set `api_key` or `ANTHROPIC_API_KEY` env var |
-| **Ollama** | llama3, mistral, gemma, etc. | Free, local, private. Requires [Ollama](https://ollama.ai) running locally |
+| Provider | Models | Env var | Notes |
+|----------|--------|---------|-------|
+| **OpenAI** | gpt-4o, gpt-4, gpt-3.5-turbo | `OPENAI_API_KEY` | Recommended |
+| **Anthropic** | claude-3-5-sonnet, claude-3-opus | `ANTHROPIC_API_KEY` | |
+| **DeepSeek** | deepseek-chat, deepseek-reasoner | `DEEPSEEK_API_KEY` | OpenAI-compatible API |
+| **Qwen** | qwen-plus, qwen-turbo, qwen-max | `DASHSCOPE_API_KEY` | Alibaba DashScope, OpenAI-compatible |
+| **Ollama** | llama3, mistral, gemma, etc. | — | Free, local, private. Requires [Ollama](https://ollama.ai) running locally |
+
+Any provider that speaks the OpenAI chat completions protocol (Azure OpenAI, LiteLLM, Groq, etc.) also works — set `provider: openai` and override `base_url`.
 
 ## Full Documentation
 

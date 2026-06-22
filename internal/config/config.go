@@ -33,10 +33,10 @@ type RemoteContextConfig struct {
 
 // LLMConfig contains LLM provider settings
 type LLMConfig struct {
-	Provider        string `yaml:"provider"`                    // openai, anthropic, local
+	Provider        string `yaml:"provider"`                    // openai, anthropic, deepseek, qwen, local, ollama
 	APIKey          string `yaml:"api_key"`
 	Model           string `yaml:"model"`
-	BaseURL         string `yaml:"base_url,omitempty"`          // for local LLMs
+	BaseURL         string `yaml:"base_url,omitempty"`          // override endpoint (supports OpenAI-compatible APIs)
 	MaxInputTokens  int    `yaml:"max_input_tokens,omitempty"`  // max tokens for input (default: 20000)
 	TokensPerMinute int    `yaml:"tokens_per_minute,omitempty"` // TPM rate limit (0 = no rate limiting)
 }
@@ -178,6 +178,13 @@ func (c *Config) overrideFromEnv() {
 		c.LLM.APIKey = apiKey
 	}
 	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" && c.LLM.Provider == "anthropic" {
+		c.LLM.APIKey = apiKey
+	}
+	if apiKey := os.Getenv("DEEPSEEK_API_KEY"); apiKey != "" && c.LLM.Provider == "deepseek" {
+		c.LLM.APIKey = apiKey
+	}
+	// Alibaba DashScope key used by Qwen models
+	if apiKey := os.Getenv("DASHSCOPE_API_KEY"); apiKey != "" && c.LLM.Provider == "qwen" {
 		c.LLM.APIKey = apiKey
 	}
 
