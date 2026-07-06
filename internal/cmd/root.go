@@ -52,6 +52,7 @@ func init() {
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(contextCmd)
 	rootCmd.AddCommand(reviewCmd)
+	rootCmd.AddCommand(mcpCmd)
 }
 
 // GetVerbose returns the verbose flag value

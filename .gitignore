@@ -21,6 +21,7 @@ vendor/
 bin/
 dist/
 build/
+/katich
 
 # IDE specific files
 .vscode/
@@ -45,3 +46,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Test artifacts (go test -tags integration / MCP tests)
+.test-katich-bin
+.test-repos/
